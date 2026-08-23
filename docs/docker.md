@@ -127,6 +127,14 @@ Behind a load balancer with more than one container it is not enough: each
 container counts its own. Use DynamoDB, or run the Cloudflare deployment
 instead. See [state-and-limits.md](state-and-limits.md).
 
+## Pre-built images
+
+CI publishes images to GHCR, so a fork or a production deployment does not
+have to build one: `ghcr.io/resoauth/sag:latest` tracks the latest release,
+and `ghcr.io/resoauth/sag:bleeding-edge` tracks `main` after every push that
+touches something buildable. Point `docker-compose.yml`'s `image:` at one of
+these instead of `build: .` to use it.
+
 ## Upgrading
 
 ```sh

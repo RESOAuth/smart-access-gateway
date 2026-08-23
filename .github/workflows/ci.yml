@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # The floor supported by package.json's engines field, and the
+        # runtime the Dockerfile actually ships.
+        node-version: ['20', '24']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      # No lockfile and no runtime dependencies for the core suite (see
+      # AGENTS.md) - wrangler is the only devDependency and nothing in
+      # test/**/*.test.js touches it, so there is nothing to install.
+      - name: Syntax check
+        run: |
+          find src adapters tools -name '*.js' -print0 \
+            | xargs -0 -n1 node --check
+
+      - name: Test
+        run: npm test

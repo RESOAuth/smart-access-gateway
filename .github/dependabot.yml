@@ -1,0 +1,41 @@
+version: 2
+
+updates:
+  # The one package.json. Wrangler is the only dependency today, but the
+  # grouping matters as soon as a second one lands - minor and patch bumps
+  # land as a single PR, majors stay separate so each gets read on its own.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-patch:
+        update-types:
+          - minor
+          - patch
+    commit-message:
+      prefix: 'chore(deps)'
+
+  # Actions used by the workflows in this directory.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - '*'
+    commit-message:
+      prefix: 'chore(ci)'
+
+  # The base image in the root Dockerfile.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      docker:
+        patterns:
+          - '*'
+    commit-message:
+      prefix: 'chore(docker)'
