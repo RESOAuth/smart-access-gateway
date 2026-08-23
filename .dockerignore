@@ -1,0 +1,17 @@
+# What never needs to reach a build.
+#
+# What ends up in an image is decided by the COPY lines in the Dockerfile, not
+# by this file: everything here is either secret, enormous, or generated. The
+# repository's own source and tests are cheap to send and the local stack in
+# test/local-stack builds its containers from the same context, so they stay.
+.git
+.github
+node_modules
+data
+coverage
+.wrangler
+*.pem
+*.jwk.json
+.env
+.env.*
+.dev.vars

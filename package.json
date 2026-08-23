@@ -1,0 +1,35 @@
+{
+  "name": "sag",
+  "version": "0.1.0",
+  "description": "Smart Access Gateway - a stateless, deployable identity proxy (RESOAuth Ltd)",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": "./src/index.js",
+    "./cloudflare": "./adapters/cloudflare/worker.js",
+    "./lambda": "./adapters/lambda/handler.js"
+  },
+  "scripts": {
+    "dev": "node adapters/node/server.js",
+    "start": "node adapters/node/server.js",
+    "start:persistent": "node tools/bootstrap.js",
+    "test": "node --test \"test/**/*.test.js\"",
+    "keygen": "node tools/keygen.js",
+    "hash-secret": "node tools/hash-secret.js",
+    "generate-client-secret": "node tools/generate-client-secret.js",
+    "cf:dev": "wrangler dev --config adapters/cloudflare/wrangler.toml",
+    "cf:deploy": "wrangler deploy --config adapters/cloudflare/wrangler.toml",
+    "example": "node examples/relying-party/server.js",
+    "stack": "test/local-stack/stack.sh",
+    "stack:up": "test/local-stack/stack.sh up",
+    "stack:verify": "test/local-stack/stack.sh verify",
+    "stack:down": "test/local-stack/stack.sh down"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

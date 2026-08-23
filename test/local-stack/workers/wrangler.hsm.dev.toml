@@ -1,0 +1,24 @@
+# The private HSM Worker, locally
+#
+# Everything in this file is development-only and published in the repository on
+# purpose, so that the stack comes up the same way on every machine. The master
+# secret and the signing key below are therefore public: they exist to make a
+# restart keep its sessions, not to protect anything. Never copy one of these
+# values into a deployment - generate your own with `npm run keygen`.
+
+name = "sag-hsm-dev"
+main = "../../../adapters/cloudflare/hsm.js"
+compatibility_date = "2026-01-01"
+workers_dev = false
+
+[vars]
+SIGNING_ALG = "ES256"
+# Must match the main Worker's value. A service binding is already private to
+# an account; this is the second layer.
+HSM_SHARED_SECRET = "local-stack-hsm-shared-secret"
+
+# The id_token signing key, and the reason this Worker exists: it is here and
+# nowhere else, so a compromise of the Worker that parses requests from the
+# internet buys the ability to ask for signatures rather than the key itself.
+# In a deployment this is a secret set with `wrangler secret put`.
+SIGNING_PRIVATE_JWK = '{"kty":"EC","crv":"P-256","x":"b9rW8UQZ7Ml-uWQG-fdEeyArY1HNWzEmWK85tvZSVc0","y":"SFgKCnlmHG8tOslctgNJQoMo1UojDkwpWLAQgprObsU","d":"9yJx8sQSBYzpEwQX7ezhaab8ZdySZ5TmT7LGSkc4zOE","alg":"ES256","kid":"local-stack-hsm"}'

@@ -1,0 +1,64 @@
+# The main SAG Worker.
+#
+# Everything secret is set with `wrangler secret put`, never here: this file is
+# committed. Only values that are safe in a repository belong in [vars].
+
+name = "sag"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+# Needed for the AWS signing path and for Node built-ins the email senders
+# reach for. Harmless when they are unused, because the bundle is tree-shaken.
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+# The issuer must be set explicitly on a real deployment. Deriving it from the
+# request would let a Host header decide what SAG claims to be.
+SAG_ISSUER = "https://id.example.com"
+SESSION_SCOPE = "shared"
+CLIENTS_CIMD_ENABLED = "true"
+EMAIL_PROVIDER = "mailchannels"
+EMAIL_FROM = "Sign in <no-reply@id.example.com>"
+LOG_LEVEL = "info"
+
+# Signing. Workers have no native asymmetric key service, so the private key
+# lives in a second Worker reached only over this binding. Deploy it with
+# adapters/cloudflare/wrangler.hsm.toml first.
+SIGNING_BACKEND = "cloudflare-hsm"
+SIGNING_ALG = "ES256"
+
+[[services]]
+binding = "HSM"
+service = "sag-hsm"
+
+# Single-use authorisation codes and OTP send limits. Optional, and the only
+# state SAG keeps. KV is deliberately not an option here: it has no
+# compare-and-set, so both controls would be races. This is the recommended
+# configuration for a Cloudflare deployment that sends email codes; see
+# docs/state-and-limits.md. Uncomment all three blocks to use it.
+# [vars] STATE_STORE_BACKEND = "cf-durable-object"
+#
+# [[durable_objects.bindings]]
+# name = "SAG_STATE"
+# class_name = "StateGuard"
+#
+# [[migrations]]
+# tag = "v1"
+# new_sqlite_classes = ["StateGuard"]
+
+# Relying party records, when they are not all in environment variables.
+# [[kv_namespaces]]
+# binding = "SAG_CLIENTS"
+# id = "replace-with-your-namespace-id"
+
+# Required secrets, set with `wrangler secret put <NAME>`:
+#
+#   SAG_SECRET          Master secret. Generate with `npm run keygen -- --secret-only`.
+#   SUBJECT_SALT        Derives the `sub`. Set once and never rotate it.
+#   HSM_SHARED_SECRET   Must match the value set on the HSM Worker.
+#   MAILCHANNELS_API_KEY
+#
+# Optional:
+#
+#   SAG_SECRET_PREVIOUS  Keeps existing sessions valid across a secret rotation.
+#   SUBJECT_TYPE         pairwise, if each relying party should see a
+#                        different `sub`. Defaults to public.

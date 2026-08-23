@@ -1,0 +1,26 @@
+# The private HSM Worker.
+#
+# This Worker holds the id_token signing key. It must have no routes and no
+# workers.dev subdomain, so that the service binding from the main Worker is
+# the only way to reach it. Check with `wrangler deployments list` after
+# deploying that no route is attached.
+
+name = "sag-hsm"
+main = "hsm.js"
+compatibility_date = "2026-01-01"
+workers_dev = false
+
+[vars]
+SIGNING_ALG = "ES256"
+# To publish a post-quantum key alongside the classical one, add it here and
+# set SIGNING_PRIVATE_JWK_ML_DSA_44 as a secret:
+# SIGNING_ADDITIONAL_ALGS = "ML-DSA-44"
+
+# Required secrets, set with `wrangler secret put <NAME> --config wrangler.hsm.toml`:
+#
+#   HSM_SHARED_SECRET      Must match the main Worker's value.
+#   SIGNING_PRIVATE_JWK    The private key, from `npm run keygen`.
+#
+# Optional, one per additional algorithm:
+#
+#   SIGNING_PRIVATE_JWK_ML_DSA_44

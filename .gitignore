@@ -1,0 +1,20 @@
+node_modules/
+.dev.vars
+.env
+.env.*
+!.env.example
+dist/
+.wrangler/
+*.pem
+*.jwk.json
+coverage/
+
+# The container's data directory: generated key material and local relying
+# party records. The directory itself is tracked so that Docker does not
+# create it as root.
+data/*
+!data/.gitkeep
+!data/clients/
+data/clients/*
+!data/clients/.gitkeep
+!data/clients/README.md

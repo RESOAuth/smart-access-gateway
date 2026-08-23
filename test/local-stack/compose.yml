@@ -1,0 +1,348 @@
+# The local stack: one SAG, three ways, with four applications signing in.
+#
+#   ./stack.sh up          build, start, wait, then print the map
+#   ./stack.sh verify      sign in against every one of them, headless
+#   ./stack.sh logs sag-node
+#   ./stack.sh down
+#
+# Why three instances rather than one: SAG is one core with three loaders, and
+# almost everything that differs between them is unreachable from a unit test -
+# a Durable Object, a KMS signature, the way API Gateway hands over cookies.
+# Each instance here therefore runs a different backend for every replaceable
+# part, so the stack fails in the place the platform actually differs:
+#
+#                     signing            state             clients
+#   sag-node    8791  a local key file   in-process map    a directory of JSON
+#   sag-workers 8792  a private Worker   Durable Object    environment variables
+#   sag-lambda  8793  AWS KMS            DynamoDB          an S3 bucket
+#
+# All three also name each other in PEER_JWKS_URLS, a complete mesh, so each
+# one's /jwks.json ends up describing all three signers rather than only its
+# own - see docs/multi-region.md. `./stack.sh verify` checks the mesh itself,
+# not only that each instance trusts its own key.
+#
+# Nothing is stubbed inside SAG. workerd and the Durable Objects are the real
+# implementation via wrangler; the Lambda runs in AWS's own base image behind
+# its runtime interface emulator; KMS, DynamoDB and S3 are LocalStack. What SAG
+# sees is what it would see deployed, which is the only version of this worth
+# running.
+#
+# Every container shares the host's network, and that one decision is what makes
+# the rest of this file boring. `http://localhost:8791` is the same address to
+# the browser, to a stub application and to SAG itself, so there are no
+# published ports, no service names, and nothing to rewrite between the front
+# channel and the back. It is also what lets a client id be a URL that
+# everything resolves identically, which is exactly what the CIMD application at
+# the bottom needs.
+#
+# Two things follow from it. This wants Linux or a Linux VM, because Docker
+# Desktop on macOS and Windows does not hand a container the host's network in
+# the same way. And every port below is bound on all interfaces rather than on
+# loopback, which is what keeps the stack reachable from a browser that is not
+# on the container host - ChromeOS included.
+
+name: sag-local-stack
+
+services:
+  # --- The AWS side --------------------------------------------------------
+  #
+  # KMS, DynamoDB and S3. The init script creates the key, the table and the
+  # bucket once the services are up, which is this stack's Terraform.
+  localstack:
+    image: docker.io/localstack/localstack:4
+    container_name: sag-localstack
+    network_mode: host
+    environment:
+      SERVICES: kms,s3,dynamodb
+      AWS_DEFAULT_REGION: eu-west-2
+      # Nothing here should outlive the stack: a fresh key and an empty table
+      # on every up is a feature, because it proves the provisioning works.
+      PERSISTENCE: '0'
+      DEBUG: '0'
+    volumes:
+      - ./localstack/init:/etc/localstack/init/ready.d:ro
+      - ./localstack/clients:/etc/localstack/seed/clients:ro
+    healthcheck:
+      # "running" is not enough: the init script has to have finished, or the
+      # Lambda has no key to sign with. LocalStack marks itself initialised
+      # only once every ready.d script has exited successfully.
+      test:
+        - CMD-SHELL
+        - >-
+          curl -sf http://localhost:4566/_localstack/init | grep -q '"state": "SUCCESSFUL"'
+      interval: 5s
+      timeout: 5s
+      start_period: 90s
+      retries: 40
+
+  # --- Instance one: a container, and nothing else --------------------------
+  #
+  # The image from the repository root, run the way docs/docker.md describes:
+  # key material generated into a volume on first start and read back on every
+  # start after, relying parties as files, state in process. One instance, one
+  # process, no cloud account.
+  sag-node:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: sag:local
+    container_name: sag-node
+    network_mode: host
+    restart: unless-stopped
+    env_file:
+      - ./env/sag-common.env
+    environment:
+      SAG_ISSUER: http://localhost:8791
+      HOST: 0.0.0.0
+      PORT: '8791'
+      # Its own, like the other two instances: the same address is deliberately
+      # a different person on each of them.
+      SUBJECT_SALT: local-stack-node-subject-salt
+      # One process, so the map is genuinely atomic and single-use codes and
+      # send limits are real. Behind two containers it would not be, which is
+      # what the other two instances demonstrate.
+      STATE_STORE_BACKEND: memory
+      CLIENTS_STORE_BACKEND: file
+      CLIENTS_STORE_DIR: /srv/clients
+      UI_PRODUCT_NAME: Node instance
+      # A cookie ignores the port, so all three instances would otherwise share
+      # one sag_session on localhost and sign each other out as you click
+      # between them. Not something a deployment on real hostnames ever hits.
+      SESSION_COOKIE_NAME: sag_session_node
+      # This is also the instance that accepts a client which describes itself
+      # rather than one registered here, and only from localhost: "any origin
+      # may register itself" is a decision an operator should make deliberately,
+      # and this is what making it looks like. See rp-cimd below.
+      CLIENTS_CIMD_ENABLED: 'true'
+      CLIENTS_CIMD_ALLOWED_DOMAINS: localhost
+      # A complete mesh: every instance names the other two, so /jwks.json
+      # everywhere ends up describing all three signers. See
+      # docs/multi-region.md. http is only accepted here because localhost is
+      # a development hostname.
+      PEER_JWKS_URLS: http://localhost:8792/.well-known/jwks.json,http://localhost:8793/.well-known/jwks.json
+    volumes:
+      # Generated key material. Named rather than a bind mount so that a
+      # rootless Podman and a rootful Docker behave the same here.
+      - sag-node-data:/data
+      # The relying party register, read only: SAG never writes it.
+      - ./clients:/srv/clients:ro
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:8791/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 6
+
+  # --- Instance two: workerd, with a private HSM ---------------------------
+  #
+  # `wrangler dev` starts two Workers from one command: SAG, and the Worker
+  # that holds the signing key. The service binding between them is wired up
+  # locally, so the signing path is the real one - a compromise of the Worker
+  # facing the internet would buy signatures, not the key.
+  sag-workers:
+    build:
+      context: ../..
+      dockerfile: test/local-stack/workers/Dockerfile
+    image: sag-local-workers:latest
+    container_name: sag-workers
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      PORT: '8792'
+    volumes:
+      # The Durable Objects' SQLite databases. Keeping them means a restart
+      # does not forget which codes have been spent.
+      - sag-workers-state:/srv/sag/.wrangler
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:8792/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      # workerd has to be downloaded into the image at build time and started
+      # here, and the first request compiles the Worker.
+      start_period: 60s
+      retries: 12
+
+  # --- Instance three: AWS Lambda, in AWS's image --------------------------
+  #
+  # The runtime interface emulator takes invocations rather than requests, so
+  # nothing browses it directly: sag-lambda-gateway is what turns a request into
+  # an invocation. It listens on loopback rather than on the whole machine, and
+  # on 8790 rather than the 8080 it defaults to, because 8080 is the most
+  # contended port on any developer's machine.
+  #
+  # Overriding the entrypoint is what moves it: the image's own entrypoint takes
+  # the handler as its argument and then starts the emulator with no arguments
+  # at all, so the handler moves into _HANDLER instead.
+  sag-lambda:
+    build:
+      context: ../..
+      dockerfile: test/local-stack/lambda/Dockerfile
+    image: sag-local-lambda:latest
+    container_name: sag-lambda
+    network_mode: host
+    restart: unless-stopped
+    entrypoint:
+      - /usr/local/bin/aws-lambda-rie
+      - --runtime-interface-emulator-address
+      - 127.0.0.1:8790
+      - /var/runtime/bootstrap
+    command: []
+    env_file:
+      - ./env/sag-common.env
+      - ./env/aws.env
+    environment:
+      _HANDLER: adapters/lambda/handler.handler
+      # The gateway's address, because that is what the browser sees.
+      SAG_ISSUER: http://localhost:8793
+      # A Lambda cannot generate and keep its own key material, so both of
+      # these are configuration. In a deployment they are Secrets Manager or
+      # SSM parameters; here they are development values, published on purpose.
+      SAG_SECRET: local-stack-lambda-master-secret-not-a-real-one-0123456789
+      SUBJECT_SALT: local-stack-lambda-subject-salt
+      # The private key never exists outside KMS, not even in memory: SAG sends
+      # the JWS signing input and gets a signature back. The alias means
+      # nothing has to be pasted between containers.
+      SIGNING_BACKEND: aws-kms
+      SIGNING_KMS_KEY_ID: alias/sag-signing
+      SIGNING_ALG: ES256
+      # Several concurrent Lambdas cannot share a map, so single-use codes and
+      # send limits need a store outside the process.
+      STATE_STORE_BACKEND: dynamodb
+      STATE_STORE_TABLE: sag-state
+      # The relying party register as JSON objects in a bucket, which is how an
+      # estate adds a client without a deployment.
+      CLIENTS_STORE_BACKEND: s3
+      CLIENTS_STORE_S3_BUCKET: sag-clients
+      CLIENTS_CIMD_ENABLED: 'false'
+      UI_PRODUCT_NAME: Lambda instance
+      SESSION_COOKIE_NAME: sag_session_lambda
+      # The other two peers of the mesh - see sag-node above.
+      PEER_JWKS_URLS: http://localhost:8791/.well-known/jwks.json,http://localhost:8792/.well-known/jwks.json
+    depends_on:
+      localstack:
+        condition: service_healthy
+
+  # API Gateway, near enough: an HTTP request in, an HTTP API v2 event out.
+  # This is the only way the Lambda adapter's cookie and base64 handling gets
+  # exercised, because those exist entirely because of this translation.
+  sag-lambda-gateway:
+    build:
+      context: ../..
+      dockerfile: test/local-stack/Dockerfile
+    image: sag-local-tools:latest
+    container_name: sag-lambda-gateway
+    network_mode: host
+    restart: unless-stopped
+    command: ['node', 'test/local-stack/lambda/front-door.js']
+    environment:
+      PORT: '8793'
+      LAMBDA_RUNTIME_URL: http://127.0.0.1:8790
+    depends_on:
+      - sag-lambda
+    healthcheck:
+      # Straight through the gateway, the emulator, the handler and on to KMS
+      # and DynamoDB: if this answers, the whole chain is up.
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:8793/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 10s
+      start_period: 60s
+      retries: 12
+
+  # --- The applications ----------------------------------------------------
+  #
+  # All four are the same hundred lines from examples/relying-party, differing
+  # only in which instance they trust and how they identify themselves. Four
+  # separate applications rather than one with a switch, because that is what
+  # catches an issuer or an audience leaking between them.
+  #
+  # Each has its own cookie name, for the reason given on sag-node.
+  rp-node:
+    image: sag-local-tools:latest
+    build:
+      context: ../..
+      dockerfile: test/local-stack/Dockerfile
+    container_name: sag-rp-node
+    network_mode: host
+    restart: unless-stopped
+    command: ['node', 'examples/relying-party/server.js']
+    environment:
+      EXAMPLE_PORT: '8801'
+      EXAMPLE_HOST: 0.0.0.0
+      EXAMPLE_PUBLIC_ORIGIN: http://localhost:8801
+      SAG_ISSUER: http://localhost:8791
+      EXAMPLE_CLIENT_ID: rp-node
+      EXAMPLE_LABEL: Node stub
+      EXAMPLE_COOKIE_NAME: rp_node_session
+      EXAMPLE_PEERS: Workers stub=http://localhost:8802,Lambda stub=http://localhost:8803,CIMD stub=http://localhost:8804
+    depends_on:
+      - sag-node
+
+  rp-workers:
+    image: sag-local-tools:latest
+    container_name: sag-rp-workers
+    network_mode: host
+    restart: unless-stopped
+    command: ['node', 'examples/relying-party/server.js']
+    environment:
+      EXAMPLE_PORT: '8802'
+      EXAMPLE_HOST: 0.0.0.0
+      EXAMPLE_PUBLIC_ORIGIN: http://localhost:8802
+      SAG_ISSUER: http://localhost:8792
+      EXAMPLE_CLIENT_ID: rp-workers
+      EXAMPLE_LABEL: Workers stub
+      EXAMPLE_COOKIE_NAME: rp_workers_session
+      EXAMPLE_PEERS: Node stub=http://localhost:8801,Lambda stub=http://localhost:8803,CIMD stub=http://localhost:8804
+    depends_on:
+      - sag-workers
+
+  rp-lambda:
+    image: sag-local-tools:latest
+    container_name: sag-rp-lambda
+    network_mode: host
+    restart: unless-stopped
+    command: ['node', 'examples/relying-party/server.js']
+    environment:
+      EXAMPLE_PORT: '8803'
+      EXAMPLE_HOST: 0.0.0.0
+      EXAMPLE_PUBLIC_ORIGIN: http://localhost:8803
+      SAG_ISSUER: http://localhost:8793
+      EXAMPLE_CLIENT_ID: rp-lambda
+      # The one confidential client in the stack: its record in the bucket
+      # holds a digest of this, never the secret, so reading the bucket is not
+      # enough to impersonate it. See data/clients/README.md.
+      EXAMPLE_CLIENT_SECRET: r-cs-local-stack-rp-lambda-secret-not-for-production
+      EXAMPLE_LABEL: Lambda stub
+      EXAMPLE_COOKIE_NAME: rp_lambda_session
+      EXAMPLE_PEERS: Node stub=http://localhost:8801,Workers stub=http://localhost:8802,CIMD stub=http://localhost:8804
+    depends_on:
+      - sag-lambda-gateway
+
+  # The fourth application, against the Node instance, that nobody registered.
+  #
+  # Its client id is the URL of a metadata document it serves itself, and SAG
+  # fetches that URL to find out what this client is. So the URL has to mean the
+  # same thing to the browser and to SAG, which on a shared host network it
+  # does: no alias, no rewriting, nothing but a port.
+  rp-cimd:
+    image: sag-local-tools:latest
+    container_name: sag-rp-cimd
+    network_mode: host
+    restart: unless-stopped
+    command: ['node', 'examples/relying-party/server.js']
+    environment:
+      EXAMPLE_PORT: '8804'
+      EXAMPLE_HOST: 0.0.0.0
+      EXAMPLE_PUBLIC_ORIGIN: http://localhost:8804
+      SAG_ISSUER: http://localhost:8791
+      # No client id and no secret: the flag makes both the client id and the
+      # document that describes it, from this application's own origin.
+      EXAMPLE_USE_CIMD_AND_PUBLIC_CLIENT: '1'
+      EXAMPLE_LABEL: CIMD stub
+      EXAMPLE_COOKIE_NAME: rp_cimd_session
+      EXAMPLE_PEERS: Node stub=http://localhost:8801,Workers stub=http://localhost:8802,Lambda stub=http://localhost:8803
+    depends_on:
+      - sag-node
+
+volumes:
+  sag-node-data:
+  sag-workers-state:

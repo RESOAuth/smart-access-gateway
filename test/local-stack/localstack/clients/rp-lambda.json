@@ -1,0 +1,9 @@
+{
+  "client_name": "Lambda stub",
+  "redirect_uris": ["http://localhost:8803/callback"],
+  "post_logout_redirect_uris": ["http://localhost:8803/"],
+  "client_secret_digest": "sha256:9c666cb7f054dd7a9481113ad13dac687cb4afac62bc7d77ab726bfc542a78a9",
+  "token_endpoint_auth_method": "client_secret_basic",
+  "require_pkce": true,
+  "scope": "openid email profile"
+}

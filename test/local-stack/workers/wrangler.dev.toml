@@ -1,0 +1,82 @@
+# SAG on workerd, as `wrangler dev` runs it
+#
+# Everything in this file is development-only and published in the repository on
+# purpose, so that the stack comes up the same way on every machine. The master
+# secret and the signing key below are therefore public: they exist to make a
+# restart keep its sessions, not to protect anything. Never copy one of these
+# values into a deployment - generate your own with `npm run keygen`.
+
+name = "sag-dev"
+main = "../../../adapters/cloudflare/worker.js"
+compatibility_date = "2026-01-01"
+# The AWS signing path and the Node built-ins the email senders reach for.
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+# What the browser calls this instance. Derived issuers are a security problem,
+# so it is set explicitly here, and compose publishes 8787 as 8792 to match.
+SAG_ISSUER = "http://localhost:8792"
+SAG_SECRET = "local-stack-workers-master-secret-not-a-real-one-0123456789"
+SUBJECT_TYPE = "pairwise"
+SUBJECT_SALT = "local-stack-workers-subject-salt"
+
+# Signing happens in the second Worker, over the service binding below. The
+# private key is not in this file and not in this Worker: that is the whole
+# point of the arrangement.
+SIGNING_BACKEND = "cloudflare-hsm"
+SIGNING_ALG = "ES256"
+HSM_SHARED_SECRET = "local-stack-hsm-shared-secret"
+
+# Single-use codes and OTP send limits, in a real Durable Object backed by
+# SQLite. Not a mock: this is the implementation Cloudflare runs.
+STATE_STORE_BACKEND = "cf-durable-object"
+
+# Codes go to this container's log, and onto the page, because the issuer is a
+# development hostname.
+EMAIL_PROVIDER = "console"
+LOG_LEVEL = "debug"
+
+# One relying party, configured in the environment: the 1-to-1 case, where an
+# application and its identity provider are deployed together and a redeploy to
+# add a client is no hardship. The other two instances in the stack keep their
+# records outside the environment instead.
+CLIENT_RPWORKERS_ID = "rp-workers"
+CLIENT_RPWORKERS_NAME = "Workers stub"
+CLIENT_RPWORKERS_REDIRECT_URIS = "http://localhost:8802/callback"
+CLIENT_RPWORKERS_POST_LOGOUT_REDIRECT_URIS = "http://localhost:8802/"
+CLIENT_RPWORKERS_SCOPES = "openid email profile"
+
+# A client metadata document has to be fetched over https from the client's own
+# domain, which nothing in a local stack has.
+CLIENTS_CIMD_ENABLED = "false"
+
+# A cookie ignores the port, so all three instances would otherwise share one
+# sag_session on localhost and sign each other out as you click between them.
+SESSION_COOKIE_NAME = "sag_session_workers"
+
+# The other two peers of the mesh - see PEER_JWKS_URLS on sag-node and
+# sag-lambda in ../compose.yml.
+PEER_JWKS_URLS = "http://localhost:8791/.well-known/jwks.json,http://localhost:8793/.well-known/jwks.json"
+
+UI_ORG_NAME = "SAG local stack"
+UI_PRODUCT_NAME = "Workers instance"
+# The Workers instance gets the same profile settings as the others; see the
+# note in env/sag-common.env, which a Worker cannot read.
+PROFILE_NAME_FROM_EMAIL = "infer"
+PROFILE_AVATAR_FALLBACK = "initials"
+SIGNIN_PROVIDER_HINT = "off"
+
+# The private HSM Worker, started from wrangler.hsm.dev.toml by the same
+# `wrangler dev` command. In a deployment it has no routes at all, so this
+# binding is the only way to reach it.
+[[services]]
+binding = "HSM"
+service = "sag-hsm-dev"
+
+[[durable_objects.bindings]]
+name = "SAG_STATE"
+class_name = "StateGuard"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["StateGuard"]
