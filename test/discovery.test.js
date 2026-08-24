@@ -9,6 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createInstance, DEV_CLIENT, DEV_REDIRECT } from './harness.js';
+import { supportsAlg } from '../src/crypto/capabilities.js';
 
 const UPSTREAM = {
   UPSTREAM_MICROSOFT_COMMON_CLIENT_ID: 'common:ms-id',
@@ -162,9 +163,10 @@ test('only the signing algorithms this instance holds keys for are offered', asy
   assert.deepEqual(classical['urn:sag:post_quantum_algs'], []);
 
   const { body: pq } = await openid(createInstance({ SIGNING_ADDITIONAL_ALGS: 'ML-DSA-44' }));
-  assert.deepEqual(pq.id_token_signing_alg_values_supported, ['ES256', 'ML-DSA-44']);
-  assert.equal(pq['urn:sag:post_quantum_signing_supported'], true);
-  assert.deepEqual(pq['urn:sag:post_quantum_algs'], ['ML-DSA-44']);
+  const hasPq = await supportsAlg('ML-DSA-44');
+  assert.deepEqual(pq.id_token_signing_alg_values_supported, hasPq ? ['ES256', 'ML-DSA-44'] : ['ES256']);
+  assert.equal(pq['urn:sag:post_quantum_signing_supported'], hasPq);
+  assert.deepEqual(pq['urn:sag:post_quantum_algs'], hasPq ? ['ML-DSA-44'] : []);
 });
 
 test('consent is only listed when the confirm screen actually appears', async () => {

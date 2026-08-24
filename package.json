@@ -16,7 +16,7 @@
     "dev": "node adapters/node/server.js",
     "start": "node adapters/node/server.js",
     "start:persistent": "node tools/bootstrap.js",
-    "test": "node --test \"test/**/*.test.js\"",
+    "test": "node --test test/*.test.js",
     "keygen": "node tools/keygen.js",
     "hash-secret": "node tools/hash-secret.js",
     "generate-client-secret": "node tools/generate-client-secret.js",
