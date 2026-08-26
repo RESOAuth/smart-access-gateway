@@ -144,19 +144,8 @@ h1 {
 .lede:last-child { margin-bottom: 0; }
 .lede strong { color: var(--ink); font-weight: 600; }
 
-.brand {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin: 0 0 1.5rem;
-  color: var(--ink-soft);
-  font-size: 0.875rem;
-  font-weight: 500;
-  letter-spacing: 0.005em;
-}
-.brand img { max-height: 2rem; max-width: 9rem; width: auto; height: auto; }
-.brand .product { color: var(--ink); font-weight: 600; }
+.client-logo { margin: 0 0 1rem; }
+.client-logo img { display: block; max-width: 7.5rem; max-height: 1.5rem; width: auto; height: auto; }
 
 form { margin: 0; }
 
@@ -320,10 +309,12 @@ footer a { color: inherit; }
 footer p { margin: 0.375rem 0; }
 footer .host { color: var(--ink-soft); font-weight: 500; }
 footer .legal a { margin-right: 0.25rem; }
+footer .logo { margin: 1.25rem 0 0; }
+footer .logo img { display: block; max-width: 9rem; max-height: 2rem; width: auto; height: auto; margin: auto; }
 
 /* The colour theme control, which only exists when sag.js has run.
-   It sits at the end of the footer rather than beside the brand, so that the
-   first Tab on the page reaches the field somebody came here to fill in. */
+   It follows the footer links, so the first Tab on the page reaches the field
+   somebody came here to fill in. */
 .theme {
   display: inline-flex;
   margin-top: 0.875rem;

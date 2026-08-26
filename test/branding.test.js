@@ -17,17 +17,16 @@ async function screen(sag, extra = {}) {
   return { res, html: await res.text() };
 }
 
-test('an unbranded deployment says what it is and who made it', async () => {
+test('an unbranded deployment keeps its attribution in the footer', async () => {
   const { html } = await screen(createInstance());
-  assert.match(html, /<p class="brand">RESOAuth <span class="product">Smart Access Gateway<\/span><\/p>/);
+  assert.ok(!/class="brand"|class="product"/.test(html));
   assert.match(html, /Powered by <a href="https:\/\/resoauth\.dev" rel="noopener">RESOAuth<\/a> Smart Access Gateway/);
 });
 
-test('an operator name replaces the product name in the header, not the attribution', async () => {
+test('an operator name is not rendered without a logo', async () => {
   const { html } = await screen(createInstance({ UI_ORG_NAME: 'Borsetshire Council' }));
-  assert.match(html, /<p class="brand">Borsetshire Council<\/p>/);
-  assert.ok(!/class="product"/.test(html), 'the person knows the council, not the software');
-  assert.match(html, /Powered by <a[^>]*>RESOAuth<\/a>/, 'but they can still see who runs the sign-in');
+  assert.ok(!/Borsetshire Council/.test(html));
+  assert.match(html, /Powered by <a[^>]*>RESOAuth<\/a>/);
 });
 
 test('whitelabelling drops the product name and keeps the attribution', async () => {
@@ -132,9 +131,12 @@ test('an operator link that is not http(s) is dropped too', async () => {
   assert.ok(!/javascript:/i.test(html));
 });
 
-test('a whitelabelled logo is not announced as somebody else', async () => {
-  // alt="RESOAuth" on the council's logo is worse than no alt text at all: a
-  // screen reader user is told the wrong organisation's name.
-  const { html } = await screen(createInstance({ UI_WHITELABEL: 'true', UI_LOGO_URL: 'https://example.test/logo.svg' }));
-  assert.match(html, /<img src="https:\/\/example\.test\/logo\.svg" alt="">/);
+test('a configured logo follows the theme control at the bottom of the footer', async () => {
+  const { html } = await screen(
+    createInstance({ UI_ORG_NAME: 'Borsetshire Council', UI_LOGO_URL: 'https://example.test/logo.svg' }),
+  );
+  assert.match(
+    html,
+    /<footer>[\s\S]*<div data-theme-control data-label="Colour theme"><\/div>\s*<p class="logo"><img src="https:\/\/example\.test\/logo\.svg" alt="Borsetshire Council"><\/p>\s*<\/footer>/,
+  );
 });

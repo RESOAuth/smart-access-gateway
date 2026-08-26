@@ -1,16 +1,20 @@
 // The document shell every page shares.
 
 import { escapeHtml, safeHttpUrl } from '../util/http.js';
+import { contentSecurityPolicy } from './csp.js';
 
 const e = escapeHtml;
 
 /**
  * @param {object} ctx     Request context, for config and paths
- * @param {object} page    { title, heading, body, description }
+ * @param {object} page    { title, body, legal, clientLogoUri, clientLogoAlt }
  */
 export function layout(ctx, page) {
   const { ui, issuer } = ctx;
   const title = page.title ? page.title + ' - ' + (ui.title || 'Sign in') : ui.title || 'Sign in';
+  const logo = safeHttpUrl(ui.logoUrl, { allowHttp: true });
+  const clientLogo = safeHttpUrl(page.clientLogoUri, { allowHttp: ctx.config.devMode });
+  if (clientLogo) ctx.csp = contentSecurityPolicy(ctx.config, clientLogo);
 
   return `<!DOCTYPE html>
 <html lang="${e(ui.locale || 'en-GB')}">
@@ -25,12 +29,13 @@ export function layout(ctx, page) {
   </head>
   <body>
     <main>
-      ${brandBlock(ui)}
+      ${clientLogo ? '<p class="client-logo"><img src="' + e(clientLogo) + '" alt="' + e(page.clientLogoAlt || '') + '"></p>' : ''}
       ${page.body}
     </main>
     <footer>
       ${footerBlock(ui, issuer, page.legal)}
       ${themeSlot()}
+      ${logo ? '<p class="logo"><img src="' + e(logo) + '" alt="' + e(ui.organisation || '') + '"></p>' : ''}
     </footer>
   </body>
 </html>
@@ -68,37 +73,14 @@ function headAssets(ctx) {
  * page whose script was blocked or failed to load shows no control at all
  * rather than one that does nothing. That is the whole reason it is not markup.
  *
- * It is last in the document, in the footer, rather than up beside the brand
- * where it would look at home. A sign-in page has one job, and the first Tab
- * should land on the field rather than on a control somebody will use once. It
- * also means the page reads the same way to a screen reader as it does to
- * anybody else: the form, then the small print, then the preferences.
+ * It is at the end of the footer's interactive content. A sign-in page has one
+ * job, and the first Tab should land on the field rather than on a control
+ * somebody will use once. It also means the page reads the same way to a
+ * screen reader as it does to anybody else: the form, then the small print,
+ * then the preferences.
  */
 function themeSlot() {
   return '<div data-theme-control data-label="Colour theme"></div>';
-}
-
-/**
- * Whose sign-in page this is.
- *
- * An operator's own name and logo come first when they are set, because the
- * person signing in knows the organisation and not the software. With nothing
- * configured the page says what it actually is, which for an unbranded
- * deployment is more trustworthy than a bare form on an unfamiliar domain.
- */
-function brandBlock(ui) {
-  const logo = safeHttpUrl(ui.logoUrl, { allowHttp: true });
-  if (logo) {
-    // The organisation's name, or nothing: a logo with no name beside it is
-    // decorative, and announcing "RESOAuth" as the name of somebody else's
-    // logo would be worse than silence.
-    return '<p class="brand"><img src="' + e(logo) + '" alt="' + e(ui.organisation || '') + '"></p>';
-  }
-  if (ui.organisation) return '<p class="brand">' + e(ui.organisation) + '</p>';
-  if (ui.whitelabel) return '';
-  return (
-    '<p class="brand">' + e(ui.brandName) + ' <span class="product">' + e(ui.productName) + '</span></p>'
-  );
 }
 
 /**

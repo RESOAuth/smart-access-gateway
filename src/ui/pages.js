@@ -13,7 +13,7 @@ const e = escapeHtml;
  * disorienting for screen reader and switch-access users and the field is the
  * first thing in the document anyway.
  */
-export function emailPage(ctx, { tx, email, error, clientName, action, legal }) {
+export function emailPage(ctx, { tx, email, error, clientName, clientLogoUri, action, legal }) {
   const forWhom = clientName
     ? 'Continue to <strong>' + e(clientName) + '</strong> by confirming your email address.'
     : 'Enter your email address to continue.';
@@ -32,7 +32,7 @@ export function emailPage(ctx, { tx, email, error, clientName, action, legal }) 
         </div>
         <button type="submit" data-busy-label="Continuing...">Continue</button>
       </form>`;
-  return layout(ctx, { title: 'Sign in', body, legal });
+  return layout(ctx, { title: 'Sign in', body, legal, clientLogoUri, clientLogoAlt: clientName });
 }
 
 /**
@@ -46,7 +46,7 @@ export function emailPage(ctx, { tx, email, error, clientName, action, legal }) 
  * a pasted code and submits it once it is complete. Nothing here needs them:
  * the field and its button work on their own.
  */
-export function otpPage(ctx, { tx, email, error, devCode, resent, action, changeAction, resendAction, codeLength, alphanumeric, legal }) {
+export function otpPage(ctx, { tx, email, error, devCode, resent, action, changeAction, resendAction, codeLength, alphanumeric, clientLogoUri, clientLogoAlt, legal }) {
   const notice = devCode
     ? noticeBlock(
         'Development mode: your sign-in code is <code>' +
@@ -93,7 +93,7 @@ export function otpPage(ctx, { tx, email, error, devCode, resent, action, change
           <button type="submit" class="secondary">Use a different email address</button>
         </form>
       </div>`;
-  return layout(ctx, { title: 'Check your email', body, legal });
+  return layout(ctx, { title: 'Check your email', body, legal, clientLogoUri, clientLogoAlt });
 }
 
 /**
@@ -104,7 +104,7 @@ export function otpPage(ctx, { tx, email, error, devCode, resent, action, change
  * picture, when the deployment carries them, are what make this recognisable
  * at a glance rather than an address to read character by character.
  */
-export function continuePage(ctx, { tx, session, identity, clientName, action, switchAction, error, legal }) {
+export function continuePage(ctx, { tx, session, identity, clientName, clientLogoUri, action, switchAction, error, legal }) {
   const who = identity || { email: session.email };
   const body = `
       <h1>Continue signing in</h1>
@@ -121,7 +121,7 @@ export function continuePage(ctx, { tx, session, identity, clientName, action, s
           <button type="submit" class="secondary">Use a different account</button>
         </form>
       </div>`;
-  return layout(ctx, { title: 'Continue', body, legal });
+  return layout(ctx, { title: 'Continue', body, legal, clientLogoUri, clientLogoAlt: clientName });
 }
 
 /** Screen 4: signed out, or confirm signing out. */
@@ -178,7 +178,7 @@ export function errorPage(ctx, { title, detail, status = 400, reference }) {
  * as a suggestion rather than a fact, because it is one: the guess comes from
  * DNS, and the provider itself is what decides.
  */
-export function chooserPage(ctx, { tx, email, options, hinted, error, otpAction, legal }) {
+export function chooserPage(ctx, { tx, email, options, hinted, error, otpAction, clientLogoUri, clientLogoAlt, legal }) {
   // With a suggestion, one option is the primary action and the rest step back.
   // With none, they are all equal - which is the honest presentation, and also
   // leaves the screen with a primary action on it rather than a row of
@@ -219,7 +219,7 @@ export function chooserPage(ctx, { tx, email, options, hinted, error, otpAction,
             '<button type="submit" class="secondary">Email me a code instead</button></form></div>'
           : ''
       }`;
-  return layout(ctx, { title: 'Choose how to sign in', body, legal });
+  return layout(ctx, { title: 'Choose how to sign in', body, legal, clientLogoUri, clientLogoAlt });
 }
 
 /**

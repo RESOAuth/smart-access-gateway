@@ -10,6 +10,7 @@ CLIENT_LEDGER_ID=ledger
 CLIENT_LEDGER_REDIRECT_URIS=https://ledger.example.com/auth/callback
 CLIENT_LEDGER_SECRET=...                 # omit for a public client
 CLIENT_LEDGER_NAME=Ledger
+CLIENT_LEDGER_LOGO_URI=https://ledger.example.com/logo.svg
 ```
 
 `LEDGER` is a slug of your choosing; it only groups the variables together and
@@ -21,6 +22,7 @@ never appears anywhere a person can see. Every field:
 | `CLIENT_<SLUG>_REDIRECT_URIS` | Comma or space separated. Matched exactly |
 | `CLIENT_<SLUG>_SECRET` | Present means confidential, absent means public |
 | `CLIENT_<SLUG>_NAME` | Shown to the person: "Continue to Ledger" |
+| `CLIENT_<SLUG>_LOGO_URI` | Small logo above the sign-in heading. Must be `https` outside development mode. |
 | `CLIENT_<SLUG>_POST_LOGOUT_REDIRECT_URIS` | Where sign-out may return to |
 | `CLIENT_<SLUG>_JWKS` / `_JWKS_URI` | For `private_key_jwt` authentication |
 | `CLIENT_<SLUG>_AUTH_METHOD` | `none`, `client_secret_basic`, `client_secret_post`, `private_key_jwt` |
@@ -67,6 +69,7 @@ A record looks like this:
 ```json
 {
   "client_name": "Ledger",
+  "logo_uri": "https://ledger.example.com/logo.svg",
   "redirect_uris": ["https://ledger.example.com/auth/callback"],
   "client_secret_digest": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
   "acr_values": ["urn:sag:acr:federated-mfa"],
@@ -112,6 +115,7 @@ Such a client is public by construction - the document is readable by anybody,
 so it can hold no secret - which is why PKCE is required of it regardless of
 what the document says. Publishing a `jwks` or `jwks_uri` instead is how one
 authenticates at the token endpoint, and the only way it stops being public.
+Its standard `logo_uri`, when present, is shown above the sign-in heading.
 
 A worked one, serving its own document and signing in with it, is in
 [examples/relying-party](../examples/relying-party/server.js):

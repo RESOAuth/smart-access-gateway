@@ -474,17 +474,15 @@ test('a deployment with no snippet does not serve one', async () => {
   assert.equal((await sag.raw('/static/custom.css')).status, 404);
 });
 
-test('an operator name and logo appear, and are escaped', async () => {
+test('support and title settings are escaped', async () => {
   const sag = createInstance({
-    UI_ORG_NAME: 'Acme & Sons <Ltd>',
     UI_SUPPORT_URL: 'https://help.acme.test/signin',
-    UI_TITLE: 'Sign in to Acme',
+    UI_TITLE: 'Sign in to Acme <Ltd>',
   });
   const html = (await emailScreen(sag)).html;
-  assert.match(html, /Acme &amp; Sons &lt;Ltd&gt;/);
-  assert.ok(!html.includes('<Ltd>'), 'operator values must be escaped');
   assert.match(html, /<a href="https:\/\/help\.acme\.test\/signin">Get help signing in<\/a>/);
-  assert.match(html, /<title>Sign in - Sign in to Acme<\/title>/);
+  assert.match(html, /<title>Sign in - Sign in to Acme &lt;Ltd&gt;<\/title>/);
+  assert.ok(!html.includes('<Ltd>'), 'operator values must be escaped');
 });
 
 test('a relying party name is shown so the person knows what they are signing into', async () => {
@@ -497,6 +495,30 @@ test('a relying party name is shown so the person knows what they are signing in
   const { path } = authorizeUrl({ challenge, clientId: 'ledger', redirectUri: 'https://ledger.test/cb' });
   const html = await (await sag.raw(path)).text();
   assert.match(html, /Continue to <strong>Acme Ledger<\/strong>/);
+});
+
+test('a relying party logo appears above the heading and is allowed by the page policy', async () => {
+  const sag = createInstance({
+    PROFILE_PICTURE: 'false',
+    CLIENT_APP_ID: 'ledger',
+    CLIENT_APP_NAME: 'Acme Ledger',
+    CLIENT_APP_LOGO_URI: 'https://ledger.test/logo.svg',
+    CLIENT_APP_REDIRECT_URIS: 'https://ledger.test/cb',
+  });
+  const { challenge } = await pkce();
+  const { path } = authorizeUrl({ challenge, clientId: 'ledger', redirectUri: 'https://ledger.test/cb' });
+  const res = await sag.raw(path);
+  const html = await res.text();
+  assert.match(
+    html,
+    /<main>\s*<p class="client-logo"><img src="https:\/\/ledger\.test\/logo\.svg" alt="Acme Ledger"><\/p>\s*<h1>Sign in<\/h1>/,
+  );
+  assert.deepEqual(policy(res.headers.get('content-security-policy'))['img-src'], ["'self'", 'data:', 'https://ledger.test']);
+
+  const otp = await sag.postForm('/authorize/email', { tx: extractField(html), email: EMAIL });
+  const otpHtml = await otp.text();
+  assert.match(otpHtml, /<p class="client-logo"><img src="https:\/\/ledger\.test\/logo\.svg" alt="Acme Ledger"><\/p>\s*<h1>Check your email<\/h1>/);
+  assert.deepEqual(policy(otp.headers.get('content-security-policy'))['img-src'], ["'self'", 'data:', 'https://ledger.test']);
 });
 
 // ---------------------------------------------------------------------------

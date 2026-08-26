@@ -8,9 +8,9 @@ limits on whitelabelling are what they are.
 
 ## The default
 
-With nothing configured, the header says **RESOAuth Smart Access Gateway** and
-the footer says which host is handling the sign-in and who made the software.
-SAG is a RESOAuth product and the default pages say so.
+With nothing configured, the footer says which host is handling the sign-in
+and who made the software. SAG is a RESOAuth product and the default pages say
+so.
 
 ## Putting your own organisation in front
 
@@ -21,8 +21,8 @@ UI_SUPPORT_URL=https://borsetshire.example/help/signing-in
 UI_TITLE=Sign in to council services
 ```
 
-The organisation name, or the logo when there is one, replaces the product
-name in the header: the person knows the council, not the software. The
+When `UI_LOGO_URL` is set, the logo is shown at the bottom of the footer, after
+the colour-theme control. `UI_ORG_NAME` supplies its alternative text. The
 attribution stays in the footer.
 
 ```sh
@@ -111,8 +111,9 @@ alone, which is usually not what you want:
 
 The control that switches between them is built by `/static/sag.js` and inserted
 into the footer. It does not exist in the HTML at all, so a page whose script was
-blocked shows no control rather than a dead one - and it is last in the document,
-so the first Tab on the page reaches the field somebody came to fill in.
+blocked shows no control rather than a dead one. It appears before an optional
+footer logo, so the first Tab on the page reaches the field somebody came to
+fill in.
 
 The choice is remembered in `localStorage` under `sag.theme`, per browser. It
 never reaches SAG, so there is nothing to configure and nothing stored about

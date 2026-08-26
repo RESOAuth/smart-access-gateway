@@ -66,6 +66,7 @@ export async function handleAuthorize(ctx) {
     client_name: client.clientName,
     // Carried on the transaction rather than re-resolved on every screen: the
     // client is already known here, and the transaction is sealed.
+    logo_uri: client.logoUri,
     tos_uri: client.tosUri,
     policy_uri: client.policyUri,
   });
@@ -151,6 +152,7 @@ async function renderEmail(ctx, { tx, email, error }) {
       email,
       error,
       clientName: tx.client_name,
+      clientLogoUri: tx.logo_uri,
       action: ctx.route('/authorize/email'),
       legal: legalFor(ctx.config, tx),
     }),
@@ -169,6 +171,8 @@ async function renderOtp(ctx, { tx, error, devCode, resent }) {
       resent,
       codeLength: ctx.config.otp.codeLength,
       alphanumeric: ctx.config.otp.codeAlphabet === 'alphanumeric',
+      clientLogoUri: tx.logo_uri,
+      clientLogoAlt: tx.client_name,
       legal: legalFor(ctx.config, tx),
       action: ctx.route('/authorize/otp'),
       resendAction: ctx.route('/authorize/resend'),
@@ -187,6 +191,7 @@ async function renderContinue(ctx, { tx, session, error }) {
       identity: displayIdentity(ctx.config, session),
       error,
       clientName: tx.client_name,
+      clientLogoUri: tx.logo_uri,
       legal: legalFor(ctx.config, tx),
       action: ctx.route('/authorize/continue'),
       switchAction: ctx.route('/authorize/restart'),
@@ -209,6 +214,8 @@ async function renderChooser(ctx, { tx, upstreams, hinted, error }) {
       options,
       hinted,
       error,
+      clientLogoUri: tx.logo_uri,
+      clientLogoAlt: tx.client_name,
       legal: legalFor(ctx.config, tx),
       otpAction: otpAllowed(ctx.config, tx.email) ? ctx.route('/authorize/otp-request') : undefined,
     }),

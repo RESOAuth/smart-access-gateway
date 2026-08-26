@@ -8,9 +8,9 @@
 // there is no inline anything to allow, so the policy needs neither a nonce nor
 // a hash and is a constant per deployment.
 //
-// The policy is built from configuration rather than fixed, because two things
-// an operator sets do widen it: a remote stylesheet, and a logo hosted
-// somewhere else.
+// The policy is built from configuration rather than fixed, because a remote
+// stylesheet and a logo hosted somewhere else need named origins. A relying
+// party's logo is added only to the page that renders it.
 //
 // One directive is deliberately absent, and it is the one a reviewer will reach
 // for first, so: `form-action` is not set on these pages, and must not be.
@@ -51,9 +51,10 @@ function originOf(value) {
  * Build the policy for this deployment.
  *
  * @param {object} config
+ * @param {string} [clientLogoUri]  Validated logo URI for this page's client
  * @returns {string}
  */
-export function contentSecurityPolicy(config) {
+export function contentSecurityPolicy(config, clientLogoUri) {
   const remote = originOf(config.ui.customCssRemoteUrl);
   const style = ["'self'"];
   if (remote) style.push(remote);
@@ -69,6 +70,8 @@ export function contentSecurityPolicy(config) {
   if (remote) img.push(remote);
   const logo = originOf(config.ui.logoUrl);
   if (logo && logo !== remote) img.push(logo);
+  const clientLogo = originOf(clientLogoUri);
+  if (clientLogo && !img.includes(clientLogo)) img.push(clientLogo);
   // An upstream profile picture is a URL at a host we do not know in advance -
   // Google serves them from lh3.googleusercontent.com today and need not
   // tomorrow - so allowing pictures at all means allowing https images. A

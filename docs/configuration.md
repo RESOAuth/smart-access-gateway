@@ -192,7 +192,7 @@ See [branding.md](branding.md).
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `UI_TITLE` | `Sign in` | |
-| `UI_ORG_NAME`, `UI_LOGO_URL` | - | The operator's own identity, shown in the header |
+| `UI_ORG_NAME`, `UI_LOGO_URL` | - | An operator logo at the bottom of the footer; the organisation name is its alternative text |
 | `UI_BRAND_NAME`, `UI_PRODUCT_NAME`, `UI_BRAND_URL` | `RESOAuth`, `Smart Access Gateway`, `https://resoauth.dev` | |
 | `UI_WHITELABEL` | `false` | Drops the product name, keeps the attribution |
 | `UI_TERMS_URL`, `UI_PRIVACY_URL` | - | Instance-wide, overridden per relying party |
