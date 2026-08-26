@@ -157,3 +157,11 @@ acr_values=urn:sag:acr:federated-mfa
 asks, which is how an enterprise deployment stops one application from being
 the weak way in. See the `acr` and `amr` values in
 [configuration.md](configuration.md).
+
+## Prompt behaviour
+
+An omitted or blank `prompt` is treated as `prompt=consent`: when SAG can use
+an existing session, it shows the person which account will continue. Send
+`prompt=none` explicitly when a relying party requires a transparent response;
+SAG then returns `login_required` rather than showing a page if it cannot
+complete from the session.

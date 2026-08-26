@@ -132,11 +132,10 @@ export async function signInWithOtp(instance, { email, authorize = {}, expectSta
 
   const first = await instance.raw(path);
   if (first.status === 303) {
-    // An existing session answered without a page. That is correct behaviour,
-    // so say so plainly rather than reporting an empty page: the caller either
-    // wants clearCookies() first, or prompt=login.
+    // A request was answered transparently, normally because it used
+    // prompt=none. Say so plainly rather than reporting an empty page.
     throw new Error(
-      'the existing session answered silently; call instance.clearCookies() or pass authorize: { prompt: "login" }',
+      'the request answered transparently; call instance.clearCookies(), or omit prompt to confirm the existing session',
     );
   }
   const firstHtml = await first.text();

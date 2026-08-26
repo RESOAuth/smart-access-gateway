@@ -81,19 +81,25 @@ test('a code is bound to the client and the redirect URI it was issued for', asy
   assert.equal(wrongRedirect.body.error, 'invalid_grant');
 });
 
-test('the second sign-in is silent, and prompt=none answers from the session', async () => {
+test('an omitted prompt asks to confirm the existing session, while prompt=none is silent', async () => {
   const sag = createInstance();
   await signInWithOtp(sag, { email: EMAIL });
 
-  // A fresh authorisation request must now complete with no interaction.
+  // A fresh authorisation request defaults to consent, so account use is
+  // visible unless the relying party explicitly opts into transparency.
   const { verifier, challenge } = await pkce();
   const { path } = authorizeUrl({ challenge });
   const res = await sag.raw(path);
-  assert.equal(res.status, 303, 'an existing session should answer without a page');
-  const location = new URL(res.headers.get('location'));
-  assert.ok(location.searchParams.get('code'));
+  assert.equal(res.status, 200, 'an omitted prompt should show the account confirmation');
+  const html = await res.text();
+  assert.match(html, /Continue as/);
+  assert.match(html, new RegExp(EMAIL));
 
-  // And so must prompt=none.
+  const blank = authorizeUrl({ challenge, prompt: '' });
+  const blankRes = await sag.raw(blank.path);
+  assert.equal(blankRes.status, 200, 'a blank prompt must not opt into a transparent response');
+
+  // prompt=none remains the explicit request for a transparent response.
   const silent = authorizeUrl({ challenge, prompt: 'none' });
   const silentRes = await sag.raw(silent.path);
   assert.equal(silentRes.status, 303);

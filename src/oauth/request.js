@@ -110,7 +110,10 @@ export async function parseAuthorizationRequest(params, config, deps) {
   }
 
   const nonce = single(params, 'nonce');
-  const prompt = (single(params, 'prompt') || '').split(/\s+/).filter(Boolean);
+  const rawPrompt = single(params, 'prompt');
+  // Make account use visible unless the client deliberately asks for a
+  // transparent request. `single()` also treats a blank prompt as absent.
+  const prompt = rawPrompt === undefined ? ['consent'] : rawPrompt.split(/\s+/).filter(Boolean);
   for (const p of prompt) if (!PROMPTS.has(p)) fail('invalid_request', 'Unsupported prompt value: ' + p + '.');
   if (prompt.includes('none') && prompt.length > 1) {
     fail('invalid_request', 'prompt=none cannot be combined with other prompt values.');

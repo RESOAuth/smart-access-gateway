@@ -59,7 +59,7 @@ fully as this instance's own.
 | `SESSION_TTL` | `43200` (12 hours) | Idle timeout |
 | `SESSION_MAX_LIFETIME` | `604800` (7 days) | Absolute lifetime, regardless of activity |
 | `PROMPT_NONE_SHARED_SESSION` | `true` | Whether `prompt=none` may be answered from the shared session when sessions are per relying party |
-| `PROMPT_CONSENT_MODE` | `continue` | `continue` shows "continue as ..."; `off` ignores `prompt=consent` |
+| `PROMPT_CONSENT_MODE` | `continue` | `continue` shows "continue as ..." for `prompt=consent` and an omitted `prompt`; `off` ignores consent requests |
 | `LOGOUT_CONFIRM` | `auto` | `auto` asks when the session is shared, `always`, `never` |
 
 ## Tokens and codes
