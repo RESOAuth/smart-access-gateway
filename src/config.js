@@ -964,11 +964,6 @@ export function loadConfig(env = {}, opts = {}) {
         '. Set STATE_STORE_BACKEND, or put a platform rate limiting rule in front of this deployment. See docs/state-and-limits.md.',
     );
   }
-  if (config.clients.cimd.enabled && !devMode && config.clients.cimd.allowedDomains.length === 0) {
-    problems.push(
-      'CLIENTS_CIMD_ENABLED is true but CLIENTS_CIMD_ALLOWED_DOMAINS is empty. Set it to the domains that may publish client metadata, or disable CLIENTS_CIMD_ENABLED.',
-    );
-  }
   if (!config.subject.salt) {
     if (devMode) {
       config.subject.salt = 'sag-development-only-subject-salt';
