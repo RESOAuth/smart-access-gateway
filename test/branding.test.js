@@ -82,7 +82,11 @@ test('nothing is shown when nothing is configured, rather than a dead link', asy
 
 test('operator supplied text is escaped, wherever it lands', async () => {
   const { html } = await screen(
-    createInstance({ UI_ORG_NAME: '<script>alert(1)</script>', UI_TERMS_URL: 'https://example.test/"onmouseover="x' }),
+    createInstance({
+      UI_ORG_NAME: '<script>alert(1)</script>',
+      UI_LOGO_URL: 'https://example.test/logo.svg',
+      UI_TERMS_URL: 'https://example.test/"onmouseover="x',
+    }),
   );
   assert.ok(!/<script>alert/.test(html));
   assert.match(html, /&lt;script&gt;/);
