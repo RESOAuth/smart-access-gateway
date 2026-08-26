@@ -313,17 +313,14 @@ async function checkInstance(instance) {
     const docRes = await fetch(instance.clientId);
     if (!docRes.ok) throw new Error('the metadata document answered ' + docRes.status);
     const doc = await docRes.json();
-    if (doc.client_id !== instance.clientId) {
-      throw new Error('the document claims client_id ' + doc.client_id + ', which is not its own URL');
+    if (!Array.isArray(doc.redirect_uris) || doc.redirect_uris.length === 0) {
+      throw new Error('the metadata document declares no redirect URIs');
     }
-    const origin = new URL(instance.clientId).origin;
-    for (const uri of doc.redirect_uris || []) {
-      if (new URL(uri).origin !== origin) throw new Error('redirect URI ' + uri + ' is outside the document origin');
-    }
+    for (const uri of doc.redirect_uris) new URL(uri);
     if (doc.token_endpoint_auth_method !== 'none') {
       throw new Error('a document served in public must not claim a secret-based auth method');
     }
-    notes.push('registered nowhere: ' + doc.redirect_uris.length + ' redirect URI(s) under its own origin');
+    notes.push('registered nowhere: ' + doc.redirect_uris.length + ' redirect URI(s)');
   }
 
   const metaRes = await fetch(instance.issuer + '/.well-known/openid-configuration');

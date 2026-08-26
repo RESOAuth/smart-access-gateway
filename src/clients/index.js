@@ -10,11 +10,11 @@
 //      serves its own metadata. No registration step at all.
 //
 // The first three are configuration an operator controls. CIMD is not, so it
-// carries the most restrictions: an allow list of domains, a size cap, and a
-// requirement that every redirect URI sits under the document's own origin.
+// carries the most restrictions: an allow list of domains and a size cap.
+// Trusting a domain means trusting the redirect URIs its documents declare.
 
 import { OAuthError } from '../util/errors.js';
-import { fetchWithTimeout } from '../util/http.js';
+import { BodyTooLargeError, fetchWithTimeout, readTextLimited } from '../util/http.js';
 import { nowSeconds } from '../util/bytes.js';
 
 /** Normalise whatever a source produced into one client shape. */
@@ -95,6 +95,20 @@ export function postLogoutRedirectAllowed(client, candidate) {
 // ---------------------------------------------------------------------------
 
 const cimdCache = new Map();
+const MAX_CIMD_CACHED = 500;
+
+function rememberCimd(clientId, client, ttlSeconds) {
+  if (ttlSeconds <= 0) return;
+  const now = nowSeconds();
+  for (const [key, entry] of cimdCache) {
+    if (entry.expiresAt <= now) cimdCache.delete(key);
+  }
+  if (cimdCache.size >= MAX_CIMD_CACHED) {
+    const oldest = cimdCache.keys().next().value;
+    if (oldest !== undefined) cimdCache.delete(oldest);
+  }
+  cimdCache.set(clientId, { client, expiresAt: now + ttlSeconds });
+}
 
 function cimdDomainAllowed(cimd, url) {
   if (!cimd.allowedDomains.length) return true;
@@ -104,6 +118,24 @@ function cimdDomainAllowed(cimd, url) {
     if (host === d) return true;
     return cimd.allowSubdomains && host.endsWith('.' + d);
   });
+}
+
+/** A CIMD key endpoint must be controlled by the same client origin. */
+function cimdJwksUri(value, documentUrl) {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    throw new OAuthError('invalid_client', 'Client metadata jwks_uri must be a URL');
+  }
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new OAuthError('invalid_client', 'Client metadata jwks_uri must be a URL');
+  }
+  if (url.username || url.password || url.origin !== documentUrl.origin) {
+    throw new OAuthError('invalid_client', 'Client metadata jwks_uri must share the document origin');
+  }
+  return url.href;
 }
 
 /**
@@ -124,6 +156,9 @@ async function resolveCimd(config, clientId) {
     return undefined;
   }
   if (url.protocol !== 'https:' && !(config.devMode && url.protocol === 'http:')) return undefined;
+  if (url.username || url.password) {
+    throw new OAuthError('invalid_client', 'A client ID metadata document URL must not contain a username or password');
+  }
   if (url.hash) throw new OAuthError('invalid_client', 'A client ID metadata document URL must not have a fragment');
   if (!cimdDomainAllowed(cimd, url)) {
     throw new OAuthError('invalid_client', 'This deployment does not accept client metadata from ' + url.hostname);
@@ -131,12 +166,18 @@ async function resolveCimd(config, clientId) {
 
   const cached = cimdCache.get(clientId);
   if (cached && cached.expiresAt > nowSeconds()) return cached.client;
+  if (cached) cimdCache.delete(clientId);
 
   const res = await fetchWithTimeout(clientId, { headers: { accept: 'application/json' } }, 5000);
   if (!res.ok) throw new OAuthError('invalid_client', 'Could not read client metadata (HTTP ' + res.status + ')');
-  const body = await res.text();
-  if (body.length > cimd.maxDocumentBytes) {
-    throw new OAuthError('invalid_client', 'Client metadata document is larger than this deployment accepts');
+  let body;
+  try {
+    body = await readTextLimited(res, cimd.maxDocumentBytes);
+  } catch (err) {
+    if (err instanceof BodyTooLargeError) {
+      throw new OAuthError('invalid_client', 'Client metadata document is larger than this deployment accepts');
+    }
+    throw err;
   }
   let doc;
   try {
@@ -144,21 +185,13 @@ async function resolveCimd(config, clientId) {
   } catch {
     throw new OAuthError('invalid_client', 'Client metadata document is not valid JSON');
   }
-  if (doc.client_id !== clientId) {
-    throw new OAuthError('invalid_client', 'Client metadata document does not claim its own URL as client_id');
-  }
   const redirectUris = Array.isArray(doc.redirect_uris) ? doc.redirect_uris : [];
-  // Every redirect URI must sit under the same origin as the document, so
-  // publishing a document can never redirect codes somewhere else.
   for (const uri of redirectUris) {
     let u;
     try {
       u = new URL(uri);
     } catch {
       throw new OAuthError('invalid_client', 'Client metadata contains a malformed redirect URI');
-    }
-    if (u.origin !== url.origin) {
-      throw new OAuthError('invalid_client', 'Client metadata redirect URIs must share the document origin');
     }
   }
   if (redirectUris.length === 0) {
@@ -170,11 +203,9 @@ async function resolveCimd(config, clientId) {
     clientId,
     clientName: doc.client_name,
     redirectUris,
-    postLogoutRedirectUris: (doc.post_logout_redirect_uris || []).filter(
-      (u) => tryOrigin(u) === url.origin,
-    ),
+    postLogoutRedirectUris: doc.post_logout_redirect_uris || [],
     jwks: doc.jwks,
-    jwksUri: doc.jwks_uri,
+    jwksUri: cimdJwksUri(doc.jwks_uri, url),
     // A CIMD client has no shared secret by construction; it is public unless
     // it published keys, in which case it can prove possession of one.
     tokenEndpointAuthMethod: doc.jwks || doc.jwks_uri ? 'private_key_jwt' : 'none',
@@ -185,18 +216,8 @@ async function resolveCimd(config, clientId) {
     tosUri: doc.tos_uri,
     requirePkce: true,
   });
-  if (cimd.cacheTtlSeconds > 0) {
-    cimdCache.set(clientId, { client, expiresAt: nowSeconds() + cimd.cacheTtlSeconds });
-  }
+  rememberCimd(clientId, client, cimd.cacheTtlSeconds);
   return client;
-}
-
-function tryOrigin(u) {
-  try {
-    return new URL(u).origin;
-  } catch {
-    return undefined;
-  }
 }
 
 export function clearCimdCache() {

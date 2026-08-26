@@ -57,12 +57,10 @@ application can turn up with no registration step at either end. Only somebody
 controlling that origin can change what the client claims to be, which is what
 makes the URL usable as an identity.
 
-It follows that the document's origin bounds it: every `redirect_uris` entry
-must sit under the same origin, or publishing a document would be a way to have
-codes delivered somewhere else. SAG enforces that, and the Node instance only
-accepts such clients from `localhost` at all
-(`CLIENTS_CIMD_ALLOWED_DOMAINS`) - "any origin may register itself" being a
-decision an operator should make deliberately.
+The Node instance accepts such clients from `localhost` only
+(`CLIENTS_CIMD_ALLOWED_DOMAINS`). That allow list is the trust boundary: a
+permitted metadata publisher chooses its redirect URIs, which can be on another
+origin or be loopback URIs for a native application.
 
 Four separate applications rather than one with a switch, because that is what
 catches an issuer or an audience leaking between them. Each page links to the
@@ -136,10 +134,8 @@ proving `PEER_JWKS_URLS` is genuinely federating rather than merely configured.
 Running `verify` against a single named instance skips this, since there is
 nothing to cross-check with one.
 
-For the self-describing client it also reads the metadata document and holds it
-to the rules SAG would refuse it for: that it claims its own URL as `client_id`,
-that every redirect URI shares its origin, and that a document served in public
-claims no secret-based authentication method.
+For the self-describing client it also reads the metadata document and checks
+that it declares redirect URIs and no secret-based authentication method.
 
 ## The AWS side
 

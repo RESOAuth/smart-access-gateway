@@ -179,6 +179,11 @@ function resolveIssuer(env, requestUrl) {
     } catch {
       throw new ConfigError('SAG_ISSUER must be an absolute URL, got "' + explicit + '"');
     }
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') {
+      throw new ConfigError('SAG_ISSUER must be an http or https URL, got "' + explicit + '"');
+    }
+    if (!u.hostname) throw new ConfigError('SAG_ISSUER must name a host, got "' + explicit + '"');
+    if (u.username || u.password) throw new ConfigError('SAG_ISSUER must not contain a username or password');
     if (u.search || u.hash) throw new ConfigError('SAG_ISSUER must not contain a query or fragment');
     // An issuer identifier has no trailing slash, so that string comparison
     // against the `iss` claim is unambiguous.
@@ -187,6 +192,9 @@ function resolveIssuer(env, requestUrl) {
   }
   if (!requestUrl) throw new ConfigError('SAG_ISSUER is not set and no request URL is available to derive it from');
   const u = new URL(requestUrl);
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') {
+    throw new ConfigError('The request URL used to derive SAG_ISSUER must be http or https');
+  }
   return { issuer: u.origin, derived: true };
 }
 
@@ -776,7 +784,10 @@ export function loadConfig(env = {}, opts = {}) {
     clients: {
       static: staticClients,
       cimd: {
-        enabled: bool(env, 'CLIENTS_CIMD_ENABLED', true),
+        // A URL client id makes SAG fetch its metadata, so accepting every
+        // origin is an SSRF surface. It remains convenient on localhost, but a
+        // real deployment must opt in and name the origins it trusts.
+        enabled: bool(env, 'CLIENTS_CIMD_ENABLED', devMode),
         allowedDomains: list(env, 'CLIENTS_CIMD_ALLOWED_DOMAINS'),
         allowSubdomains: bool(env, 'CLIENTS_CIMD_ALLOW_SUBDOMAINS', true),
         cacheTtlSeconds: int(env, 'CLIENTS_CIMD_CACHE_TTL', 300, { min: 0, max: 86400 }),
@@ -951,6 +962,11 @@ export function loadConfig(env = {}, opts = {}) {
       'No state store is configured, so authorisation codes are single-use by convention only' +
         (otpEnabled ? ' and OTP send limits are not enforced' : '') +
         '. Set STATE_STORE_BACKEND, or put a platform rate limiting rule in front of this deployment. See docs/state-and-limits.md.',
+    );
+  }
+  if (config.clients.cimd.enabled && !devMode && config.clients.cimd.allowedDomains.length === 0) {
+    problems.push(
+      'CLIENTS_CIMD_ENABLED is true but CLIENTS_CIMD_ALLOWED_DOMAINS is empty. Set it to the domains that may publish client metadata, or disable CLIENTS_CIMD_ENABLED.',
     );
   }
   if (!config.subject.salt) {

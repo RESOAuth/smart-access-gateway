@@ -264,14 +264,23 @@ function serveCimd(doc, { status = 200, url = APP + '/client.json' } = {}) {
 }
 
 const cimdConfig = (env = {}) =>
-  loadConfig({ SAG_ISSUER: 'https://id.example.test', SAG_SECRET: 'x'.repeat(48), ...env });
+  loadConfig({
+    SAG_ISSUER: 'https://id.example.test',
+    SAG_SECRET: 'x'.repeat(48),
+    CLIENTS_CIMD_ENABLED: 'true',
+    CLIENTS_CIMD_ALLOWED_DOMAINS: 'example.test',
+    ...env,
+  });
 
-test('a CIMD client is accepted when its document claims its own URL', async (t) => {
+test('a CIMD document may describe a distinct client and localhost redirect URI', async (t) => {
   clearCimdCache();
   const stub = serveCimd({
-    client_id: APP + '/client.json',
+    // A native application's public metadata can live separately from its
+    // loopback listener. The document's optional client_id is not SAG's
+    // client identifier - the metadata URL presented at /authorize is.
+    client_id: 'http://localhost:3000',
     client_name: 'Example App',
-    redirect_uris: [APP + '/callback'],
+    redirect_uris: ['http://localhost:3000/callback'],
   });
   t.after(() => {
     stub.restore();
@@ -283,28 +292,8 @@ test('a CIMD client is accepted when its document claims its own URL', async (t)
   assert.equal(client.clientName, 'Example App');
   assert.equal(client.tokenEndpointAuthMethod, 'none', 'no keys means a public client');
   assert.ok(client.requirePkce, 'a client that cannot be authenticated must use PKCE');
-  assert.ok(redirectUriAllowed(client, APP + '/callback'));
-});
-
-test('a CIMD document is refused when it does not claim its own URL', async (t) => {
-  clearCimdCache();
-  const stub = serveCimd({ client_id: 'https://someone-else.test/client.json', redirect_uris: [APP + '/cb'] });
-  t.after(stub.restore);
-
-  await assert.rejects(() => resolveClient(cimdConfig(), stub.url), /does not claim its own URL/);
-});
-
-test('CIMD redirect URIs must share the document origin', async (t) => {
-  clearCimdCache();
-  // Otherwise publishing a document would be enough to have codes sent
-  // somewhere the publisher does not control.
-  const stub = serveCimd({
-    client_id: APP + '/client.json',
-    redirect_uris: [APP + '/callback', 'https://attacker.test/collect'],
-  });
-  t.after(stub.restore);
-
-  await assert.rejects(() => resolveClient(cimdConfig(), stub.url), /share the document origin/);
+  assert.equal(client.clientId, stub.url);
+  assert.ok(redirectUriAllowed(client, 'http://localhost:49152/callback'));
 });
 
 test('CIMD can be restricted to particular domains, with or without subdomains', async (t) => {

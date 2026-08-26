@@ -179,8 +179,8 @@ bucket, all of it local.
 | `CLIENTS_STORE_PREFIX` | `clients/`, or empty with `file` | Key prefix within the store |
 | `CLIENTS_STORE_CACHE_TTL` | `60` | Seconds a record is cached. "No such client" is cached too, but for at most ten seconds, so a record added a moment ago is not refused for a minute |
 | `CLIENTS_OPAQUE_ENABLED` | `true` | Whether store-held clients are accepted at all |
-| `CLIENTS_CIMD_ENABLED` | `true` | Client ID Metadata Documents |
-| `CLIENTS_CIMD_ALLOWED_DOMAINS` | - | Empty means any origin |
+| `CLIENTS_CIMD_ENABLED` | Development mode | Client ID Metadata Documents. Production deployments must enable it explicitly. |
+| `CLIENTS_CIMD_ALLOWED_DOMAINS` | - | Required when CIMD is enabled outside development mode. Each listed domain may declare its own redirect URIs. |
 | `CLIENTS_CIMD_ALLOW_SUBDOMAINS` | `true` | |
 | `CLIENTS_CIMD_CACHE_TTL` | `300` | |
 | `CLIENTS_CIMD_MAX_BYTES` | `32768` | Size cap on a fetched document |

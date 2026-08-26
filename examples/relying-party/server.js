@@ -88,7 +88,7 @@ async function backchannelFetch(url, init = {}, attempt = 1) {
 // documented and hoped for. The document has to be at an address SAG can
 // actually fetch and the browser can actually reach, so it is built from
 // EXAMPLE_PUBLIC_ORIGIN and not from the address this process binds to. And
-// every redirect URI in it must share that origin, or SAG refuses the client:
+// the configured metadata publisher is trusted to declare its redirect URIs:
 // otherwise publishing a document would be a way to have codes delivered
 // somewhere else.
 const USE_CIMD_AND_PUBLIC_CLIENT = process.env.EXAMPLE_USE_CIMD_AND_PUBLIC_CLIENT === '1';
@@ -211,9 +211,9 @@ async function verifyIdToken(token, { nonce, clientId }) {
  * What this client says it is, at the URL that is its client id.
  *
  * This is the whole of "registration" for a CIMD client: RFC 7591 client
- * metadata, served as JSON, claiming its own URL as `client_id`. SAG checks
- * that claim - a document that named a different id would be somebody else's
- * identity - and checks that every redirect URI shares the document's origin.
+ * metadata, served as JSON. SAG uses the URL it fetched as the client id; a
+ * document may use a different `client_id`, for example for a native client
+ * whose redirect URI is on localhost. Its publisher chooses the redirect URIs.
  *
  * There is no secret in here and there never can be: the document is public by
  * construction, so PKCE is what protects the code, and SAG requires it of a

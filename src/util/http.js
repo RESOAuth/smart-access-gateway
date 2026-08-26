@@ -77,7 +77,14 @@ export function parseCookies(request) {
     if (idx < 1) continue;
     const name = part.slice(0, idx).trim();
     const value = part.slice(idx + 1).trim();
-    if (name) out.set(name, decodeURIComponent(value));
+    if (!name) continue;
+    // Cookie values are not trustworthy input. A malformed percent escape must
+    // be one bad cookie, not a 500 on every route which happens to read it.
+    try {
+      out.set(name, decodeURIComponent(value));
+    } catch {
+      out.set(name, value);
+    }
   }
   return out;
 }
@@ -99,7 +106,69 @@ export function serialiseCookie(name, value, opts = {}) {
   return bits.join('; ');
 }
 
-const MAX_BODY = 64 * 1024;
+const MAX_FORM_BODY_BYTES = 64 * 1024;
+
+/** Raised when a streamed HTTP body crosses its caller's byte limit. */
+export class BodyTooLargeError extends Error {
+  constructor(maxBytes) {
+    super('HTTP body is larger than ' + maxBytes + ' bytes');
+    this.name = 'BodyTooLargeError';
+  }
+}
+
+/**
+ * Read a Fetch Request or Response without ever buffering more than maxBytes.
+ *
+ * A check after `text()` is too late: by then an attacker has already made an
+ * isolate or Node process allocate the whole body. Content-Length is only an
+ * early refusal - the streamed count remains authoritative, including for a
+ * compressed response whose decoded body is much larger than its header says.
+ */
+export async function readTextLimited(message, maxBytes) {
+  const declared = message.headers?.get('content-length');
+  if (declared && /^\d+$/.test(declared.trim()) && Number(declared) > maxBytes) {
+    try {
+      await message.body?.cancel();
+    } catch {
+      // Cancelling is only an optimisation. The caller still gets the refusal.
+    }
+    throw new BodyTooLargeError(maxBytes);
+  }
+
+  const body = message.body;
+  if (!body) return '';
+  const reader = body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+      total += chunk.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new BodyTooLargeError(maxBytes);
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+/** Read and parse a bounded JSON document. */
+export async function readJsonLimited(message, maxBytes) {
+  return JSON.parse(await readTextLimited(message, maxBytes));
+}
 
 /** Read an application/x-www-form-urlencoded body as URLSearchParams. */
 export async function readForm(request) {
@@ -107,8 +176,13 @@ export async function readForm(request) {
   if (ct !== 'application/x-www-form-urlencoded') {
     throw new OAuthError('invalid_request', 'Request body must be application/x-www-form-urlencoded');
   }
-  const body = await request.text();
-  if (body.length > MAX_BODY) throw new OAuthError('invalid_request', 'Request body too large');
+  let body;
+  try {
+    body = await readTextLimited(request, MAX_FORM_BODY_BYTES);
+  } catch (err) {
+    if (err instanceof BodyTooLargeError) throw new OAuthError('invalid_request', 'Request body too large');
+    throw err;
+  }
   return new URLSearchParams(body);
 }
 
