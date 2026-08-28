@@ -423,7 +423,7 @@ const server = createServer(async (req, res) => {
       400,
       page(
         'Something went wrong',
-        `<div class="err"><strong>Sign-in failed</strong><br>${esc(err.message)}${cause ? ' <code>' + esc(cause) + '</code>' : ''}</div>
+        `<div class="err"><strong>Sign-in failed</strong><br>The request could not be completed.</div>
       <p class="lede" style="margin-top:1rem">The back channel is
       <code>${esc(BACKCHANNEL)}</code>. This application's log has the rest.</p>
       <p style="margin-top:1.5rem"><a class="btn" href="/">Start again</a></p>`,

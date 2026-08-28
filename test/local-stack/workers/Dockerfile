@@ -18,8 +18,8 @@ WORKDIR /srv/sag
 
 # Wrangler is the only dependency SAG has, and only for this. Installed before
 # the source is copied so that editing a file does not reinstall it.
-COPY package.json ./
-RUN npm install --no-audit --no-fund --loglevel=error && npm cache clean --force
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund --loglevel=error && npm cache clean --force
 
 COPY src ./src
 COPY adapters ./adapters
