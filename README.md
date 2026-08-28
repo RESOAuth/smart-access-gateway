@@ -14,6 +14,9 @@ It is built to be deployed by anybody in a few minutes, and to be operated at
 scale by [RESOAuth](https://resoauth.dev) on behalf of customers who would
 rather not.
 
+[Read the documentation](https://sag.resoauth.dev) to use RESOAuth's hosted
+gateway or deploy SAG yourself.
+
 ## Try it
 
 ```sh
@@ -26,7 +29,8 @@ Then point any OpenID Connect client library at
 example relying party with `npm run example` and open
 `http://127.0.0.1:8788`.
 
-[Quickstart](docs/quickstart.md) has the details, including what to do next.
+The [self-hosting quickstart](https://sag.resoauth.dev/self-host/quickstart)
+has the details, including what to do next.
 
 ## What makes it different
 
@@ -76,25 +80,28 @@ page, which is what lets every one of them carry a policy starting at
 
 ## Documentation
 
-Everything is in [docs/](docs/README.md):
+The versioned user documentation is at
+[sag.resoauth.dev](https://sag.resoauth.dev). It covers both the gateway
+RESOAuth runs and self-hosted deployments.
 
 | | |
 | --- | --- |
-| [quickstart.md](docs/quickstart.md) | Get it running |
-| [docker.md](docs/docker.md) | The container and its data directory |
-| [deployment.md](docs/deployment.md) | Cloudflare, AWS, containers |
-| [multi-region.md](docs/multi-region.md) | Running several instances as one issuer |
-| [configuration.md](docs/configuration.md) | Every environment variable |
-| [relying-parties.md](docs/relying-parties.md) | Adding applications |
-| [upstreams.md](docs/upstreams.md) | Adding Microsoft and Google, and guessing which |
-| [profile-claims.md](docs/profile-claims.md) | Names and pictures: relayed, and guessed |
-| [branding.md](docs/branding.md) | Branding, whitelabelling, custom CSS, light and dark |
-| [state-and-limits.md](docs/state-and-limits.md) | Single-use codes and rate limits |
-| [operations.md](docs/operations.md) | Rotation, compromise, `/healthz` |
+| [Use the hosted gateway](https://sag.resoauth.dev/hosted) | Connect an application to `auth.resoauth.cloud` |
+| [Deploy your own](https://sag.resoauth.dev/self-host/quickstart) | Quickstart, containers, Cloudflare, AWS, and operations |
+| [Reference](https://sag.resoauth.dev/reference/configuration) | Configuration, endpoints, relying parties, upstreams, and claims |
+
+Design notes stay beside the code so there is one authoritative copy of the
+reasoning:
+
+| | |
+| --- | --- |
 | [limitations.md](docs/limitations.md) | What it does not do |
 | [post-quantum.md](docs/post-quantum.md) | Where the cryptography stands |
 | [adr/](docs/adr/README.md) · [rfcs/](docs/rfcs/README.md) | Why, and what is next |
 | [test/local-stack/](test/local-stack/README.md) | Every platform at once, locally |
+
+The [repository documentation index](docs/README.md) explains how working
+copies of self-hosting documentation are kept in step with the versioned site.
 
 ## Contributing and security
 
@@ -103,9 +110,15 @@ Bug reports, enhancements, and pull requests are welcome. Read
 vulnerabilities privately as described in [SECURITY.md](SECURITY.md), not in a
 public issue.
 
+The [OpenSSF Best Practices evidence](docs/best-practices.md) maps the passing
+badge's MUST criteria to public project evidence and identifies the few answers
+which require a maintainer attestation.
+
 ## Testing
 
 ```sh
+npm run check
+npm run lint
 npm test
 ```
 

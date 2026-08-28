@@ -113,6 +113,11 @@ commitments that will be monitored.
 
 **Answer:**
 
+Acknowledgement is due within 14 days. A confirmed exploitable vulnerability
+of medium or higher severity must be fixed as soon as practical and within 60
+days after it becomes public. No separate status-update or coordinated-
+disclosure interval is promised yet. See `SECURITY.md`.
+
 ### What constitutes a verifiable release?
 
 The workflows now request OCI provenance and an SBOM, but the existing GitHub

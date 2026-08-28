@@ -1,49 +1,37 @@
 # SAG documentation
 
-Start here.
+User documentation is published at
+[sag.resoauth.dev](https://sag.resoauth.dev). Use the published site when
+configuring or operating a release: it covers both RESOAuth's hosted gateway
+and self-hosted deployments, and its version picker keeps instructions aligned
+with the release being run.
 
-## Getting it running
+## User documentation
 
-- [quickstart.md](quickstart.md) - `npm run dev`, `docker compose up`, and the
-  worked example relying party.
-- [docker.md](docker.md) - the container: what is in the data directory, how
-  configuration works, TLS, upgrading.
-- [deployment.md](deployment.md) - Cloudflare Workers, AWS Lambda, containers,
-  and what to configure before taking traffic.
-- [multi-region.md](multi-region.md) - running several instances as one
-  issuer: what has to be identical, and `/alive` versus `/healthz`.
-- [../test/local-stack/](../test/local-stack/README.md) - every platform at
-  once: a container, workerd, and a Lambda against KMS, DynamoDB and S3, with
-  three applications signing in.
+- [Documentation home](https://sag.resoauth.dev) - choose the hosted gateway or
+  a self-hosted deployment.
+- [Use the hosted gateway](https://sag.resoauth.dev/hosted) - connect an
+  application to `auth.resoauth.cloud`.
+- [Deploy your own](https://sag.resoauth.dev/self-host/quickstart) - quickstart,
+  containers, deployment, multi-region operation, state, and limits.
+- [Reference](https://sag.resoauth.dev/reference/configuration) - configuration,
+  endpoints, relying parties, upstreams, branding, and profile claims.
 
-## Configuring it
+The self-hosting and reference Markdown files in this directory are working
+copies kept beside the behaviour they describe. They are ported to the
+documentation repository and versioned when SAG is released. Keeping them here
+also lets source comments link to the relevant explanation without depending
+on a website. Do not copy the design notes below to the user documentation.
 
-- [configuration.md](configuration.md) - every environment variable.
-- [relying-parties.md](relying-parties.md) - the four ways to describe an
-  application that signs people in.
-- [upstreams.md](upstreams.md) - Microsoft, Google, routing by email domain,
-  and guessing the provider from a domain's mail records.
-- [profile-claims.md](profile-claims.md) - names and pictures: what is relayed
-  from an upstream, what is guessed from an address, and why guessing is off.
-- [branding.md](branding.md) - operator branding, whitelabelling, custom CSS,
-  terms and privacy links.
-- [state-and-limits.md](state-and-limits.md) - single-use codes and client
-  assertions, OTP send limits, and which backend to use per platform.
+## Repository documentation
 
-## Running it
-
-- [operations.md](operations.md) - rotating secrets and keys, suspected
-  compromise, reading `/healthz`.
 - [limitations.md](limitations.md) - what SAG does not do, and what closes
   each gap.
 - [post-quantum.md](post-quantum.md) - where the cryptography stands and how a
   migration runs.
-
-## Where it is going
-
+- [best-practices.md](best-practices.md) - evidence for the OpenSSF Best
+  Practices passing criteria.
 - [adr/](adr/README.md) - why SAG's decisions were made, one record each.
 - [rfcs/](rfcs/README.md) - proposed but not yet decided, with the reasoning.
-- [signed-relying-party-requests.md](signed-relying-party-requests.md) - the
-  design discussion behind [ADR 0010](adr/0010-signed-outbound-requests.md):
-  authenticating every outbound call SAG makes on its own behalf, to a
-  relying party's own endpoints or an upstream identity provider.
+- [../test/local-stack/](../test/local-stack/README.md) - a container, workerd,
+  and a Lambda against KMS, DynamoDB, and S3, tested together locally.

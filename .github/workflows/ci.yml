@@ -34,12 +34,10 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Syntax check
-        run: |
-          find src adapters tools -name '*.js' -print0 \
-            | xargs -0 -n1 node --check
+        run: npm run check
       
       - name: Lint
-        run: npx eslint .
+        run: npm run lint
 
       - name: Test
         run: npm test

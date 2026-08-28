@@ -46,6 +46,21 @@ function signParams(alg) {
   return spec.name;
 }
 
+function assertKeyStrength(jwk, alg) {
+  const spec = algParams(alg);
+  if (spec.kty !== 'RSA') return;
+  if (jwk.kty !== 'RSA' || typeof jwk.n !== 'string') {
+    throw new Error(alg + ' requires an RSA key');
+  }
+  const modulus = unb64u(jwk.n);
+  let first = 0;
+  while (first < modulus.length && modulus[first] === 0) first++;
+  const bits = first === modulus.length
+    ? 0
+    : (modulus.length - first - 1) * 8 + (32 - Math.clz32(modulus[first]));
+  if (bits < 2048) throw new Error(alg + ' requires an RSA modulus of at least 2048 bits');
+}
+
 export { importParams as webCryptoImportParams, signParams as webCryptoSignParams };
 
 /** RFC 7638 JWK thumbprint, used as the default kid. */
@@ -70,11 +85,13 @@ export function publicPartOf(jwk) {
 }
 
 export async function importPrivateJwk(jwk, alg) {
+  assertKeyStrength(jwk, alg);
   return crypto.subtle.importKey('jwk', { ...jwk, ext: true }, importParams(alg), true, ['sign']);
 }
 
 export async function importPublicJwk(jwk, alg) {
   const pub = publicPartOf(jwk);
+  assertKeyStrength(pub, alg);
   return crypto.subtle.importKey('jwk', pub, importParams(alg), true, ['verify']);
 }
 
@@ -193,6 +210,7 @@ export function derToRawEcdsa(der, curve = 'P-256') {
 export async function spkiToJwk(der, alg) {
   const key = await crypto.subtle.importKey('spki', der, importParams(alg), true, ['verify']);
   const jwk = await crypto.subtle.exportKey('jwk', key);
+  assertKeyStrength(jwk, alg);
   return publicPartOf({ ...jwk, alg });
 }
 

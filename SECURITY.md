@@ -11,9 +11,13 @@ Include the affected route or component, the practical impact, reproduction
 steps or a proof of concept, and any mitigation already tried. Do not include
 real credentials, tokens, email addresses, or other personal data.
 
-The maintainers will acknowledge the report, investigate it, and coordinate a
-fix and disclosure with the reporter. A security advisory and release notes
-will identify publicly known vulnerabilities fixed by a release.
+The maintainers will acknowledge a report within 14 days, investigate it, and
+coordinate a fix and disclosure with the reporter. A security advisory and
+release notes will identify publicly known vulnerabilities fixed by a release.
+
+Confirmed exploitable vulnerabilities of medium or higher severity are fixed
+as soon as practical and no later than 60 days after they become public. The
+same remediation rule applies to findings from static and dynamic analysis.
 
 ## Supported versions
 
