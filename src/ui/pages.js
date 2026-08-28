@@ -13,7 +13,7 @@ const e = escapeHtml;
  * disorienting for screen reader and switch-access users and the field is the
  * first thing in the document anyway.
  */
-export function emailPage(ctx, { tx, email, error, clientName, clientLogoUri, action, legal }) {
+export function emailPage(ctx, { tx, email, rememberMe, error, clientName, clientLogoUri, action, legal }) {
   const forWhom = clientName
     ? 'Continue to <strong>' + e(clientName) + '</strong> by confirming your email address.'
     : 'Enter your email address to continue.';
@@ -29,6 +29,11 @@ export function emailPage(ctx, { tx, email, error, clientName, clientLogoUri, ac
                  autocomplete="username email" spellcheck="false"
                  required value="${e(email || '')}"
                  ${error ? 'aria-invalid="true"' : ''}>
+        </div>
+        <div class="remember-me">
+          <input id="remember_me" name="remember_me" type="checkbox" value="1"
+                 ${rememberMe ? 'checked' : ''}>
+          <label for="remember_me">Remember me</label>
         </div>
         <button type="submit" data-busy-label="Continuing...">Continue</button>
       </form>`;

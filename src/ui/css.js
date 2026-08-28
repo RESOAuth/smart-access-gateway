@@ -174,6 +174,15 @@ input[type="email"]:hover, input[type="text"]:hover { border-color: var(--ink-fa
 input[type="email"]:focus, input[type="text"]:focus { border-color: var(--accent); }
 input[aria-invalid="true"] { border-color: var(--error); }
 
+.remember-me {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  margin: -0.5rem 0 1.5rem;
+}
+.remember-me input { width: 1.125rem; height: 1.125rem; margin: 0; }
+.remember-me label { margin: 0; font-weight: 500; }
+
 /* A one-time code is read back character by character, so give it room and
    tracking, and lining figures so the glyph widths do not jump as it is typed. */
 input.code {
