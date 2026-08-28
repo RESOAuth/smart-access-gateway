@@ -36,6 +36,7 @@ import { emailPage, otpPage, continuePage, chooserPage, legalFor } from '../ui/p
 import { checkOtpSendAllowed } from '../store/limits.js';
 import { authorizationResponse, failureResponse, startAgainResponse } from './respond.js';
 import { nowSeconds } from '../util/bytes.js';
+import { hasRememberMeCookie, readRememberedEmail, rememberMeCookie, clearRememberMeCookie } from '../remember-me.js';
 
 // ---------------------------------------------------------------------------
 // GET/POST /authorize
@@ -139,11 +140,15 @@ const redirectTargets = (tx) => ({
 // ---------------------------------------------------------------------------
 
 async function renderEmail(ctx, { tx, email, error }) {
+  const rememberedEmail = await readRememberedEmail(ctx.config, ctx.request);
+  const rememberMe = tx.remember_me ?? Boolean(rememberedEmail);
+  const displayedEmail = email !== undefined ? email : rememberedEmail;
   const sealed = await sealTransaction(ctx.config, advance(tx, { stage: STAGE.EMAIL }));
-  return html(
+  let response = html(
     emailPage(ctx, {
       tx: sealed,
-      email,
+      email: displayedEmail,
+      rememberMe,
       error,
       clientName: tx.client_name,
       clientLogoUri: tx.logo_uri,
@@ -152,6 +157,12 @@ async function renderEmail(ctx, { tx, email, error }) {
     }),
     error ? 400 : 200,
   );
+  // Reading a valid cookie counts as use, so extend its rolling lifetime. An
+  // explicitly unticked box is left alone until authentication succeeds.
+  if (rememberedEmail && tx.remember_me !== false) {
+    response = withCookie(response, await rememberMeCookie(ctx.config, rememberedEmail));
+  }
+  return response;
 }
 
 async function renderOtp(ctx, { tx, error, devCode, resent }) {
@@ -261,16 +272,18 @@ export async function handleEmailSubmit(ctx) {
   if (loaded.fail) return loaded.fail;
   const { tx, params } = loaded;
 
+  const next = advance(tx, { remember_me: single(params, 'remember_me') !== undefined });
+
   const email = normaliseEmail(single(params, 'email'));
   if (!email || !looksLikeEmail(email)) {
     return renderEmail(ctx, {
-      tx,
-      email: single(params, 'email'),
+      tx: next,
+      email: params.get('email') ?? '',
       error: { title: 'Check your email address', detail: 'Enter an address in the form name@example.com.' },
     });
   }
 
-  return route(ctx, { tx: advance(tx, { email }) });
+  return route(ctx, { tx: advance(next, { email }) });
 }
 
 /**
@@ -718,6 +731,16 @@ async function complete(ctx, { tx, client, session, refreshCookie }) {
   if (refreshCookie) {
     const cookie = await sessionCookie(ctx.config, session, sessionClientFor(ctx.config, client));
     response = withCookie(response, cookie);
+  }
+  if (tx.remember_me === true) {
+    response = withCookie(response, await rememberMeCookie(ctx.config, session.email));
+  } else if (tx.remember_me === false) {
+    if (hasRememberMeCookie(ctx.request)) response = withCookie(response, clearRememberMeCookie());
+  } else {
+    // A request answered from an existing session has no email form. Preserve
+    // an earlier opt-in and roll it forward when that authentication succeeds.
+    const rememberedEmail = await readRememberedEmail(ctx.config, ctx.request);
+    if (rememberedEmail) response = withCookie(response, await rememberMeCookie(ctx.config, session.email));
   }
   return response;
 }
