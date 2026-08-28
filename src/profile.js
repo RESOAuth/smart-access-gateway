@@ -127,7 +127,7 @@ export function nameFromEmail(email) {
   // lower case, so there is never a case boundary left to find. `jamietaylor`
   // stays one word, which is the only honest reading of it.
   const words = base
-    .replace(/[._\-]+/g, ' ')
+    .replace(/[._-]+/g, ' ')
     .trim()
     .split(/\s+/)
     .filter(Boolean);
@@ -144,7 +144,7 @@ export function nameFromEmail(email) {
 /** One or two initials for an avatar, from a name if there is one. */
 export function initialsFor({ name, email }) {
   const source = name || nameFromEmail(email) || String(email || '');
-  const words = source.replace(/@.*$/, '').split(/[\s._\-]+/).filter((w) => /[a-z]/i.test(w));
+  const words = source.replace(/@.*$/, '').split(/[\s._-]+/).filter((w) => /[a-z]/i.test(w));
   if (words.length === 0) return '?';
   if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
   return (words[0][0] + words[words.length - 1][0]).toUpperCase();

@@ -2,14 +2,25 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createInstance, signInWithOtp, redeem, pkce, authorizeUrl, extractField, DEV_CLIENT, DEV_REDIRECT } from './harness.js';
+import { createInstance, signInWithOtp, redeem, pkce, authorizeUrl, DEV_CLIENT, DEV_REDIRECT } from './harness.js';
 import { resolveClient, redirectUriAllowed, clearCimdCache } from '../src/clients/index.js';
 import { createClientStore } from '../src/clients/store.js';
 import { subjectFor, sectorFor } from '../src/identity.js';
 import { loadConfig } from '../src/config.js';
-import { signCompact, publicPartOf, jwkThumbprint, verifyCompact, decodeJwt } from '../src/crypto/jose.js';
+import {
+  signCompact,
+  publicPartOf,
+  jwkThumbprint,
+  verifyCompact,
+  decodeJwt,
+  selectJwk,
+  fetchJwks,
+  clearJwksCache,
+} from '../src/crypto/jose.js';
 import { sha256hex } from '../src/crypto/secrets.js';
 import { nowSeconds, randomToken } from '../src/util/bytes.js';
+import { parseAuthorizationRequest } from '../src/oauth/request.js';
+import { ACR } from '../src/acr.js';
 
 const EMAIL = 'person@example.org';
 const APP = 'https://app.example.test';
@@ -56,6 +67,21 @@ test('a client authentication method that is not one of the four is refused', as
   assert.ok(!meta.token_endpoint_auth_methods_supported.includes('client_secret_jwt'));
 });
 
+test('an invalid per-client session scope is refused rather than becoming shared', () => {
+  const config = loadConfig({
+    SAG_ISSUER: 'http://localhost:8787',
+    CLIENT_APP_ID: 'ledger',
+    CLIENT_APP_REDIRECT_URIS: 'https://ledger.test/cb',
+    CLIENT_APP_SESSION_SCOPE: 'private',
+  });
+  assert.equal(
+    config.clients.static.find((client) => client.clientId === 'ledger'),
+    undefined,
+    'a typo must not silently weaken isolation',
+  );
+  assert.ok(config.internalWarnings.some((w) => /SESSION_SCOPE must be shared or rp/.test(w)));
+});
+
 test('redirect URIs match exactly, with the loopback port exception', () => {
   const client = {
     redirectUris: ['https://app.example.test/callback', 'http://127.0.0.1:1234/cb'],
@@ -75,6 +101,94 @@ test('redirect URIs match exactly, with the loopback port exception', () => {
   assert.ok(redirectUriAllowed(client, 'http://127.0.0.1:59123/cb'), 'the loopback port is ignored');
   assert.ok(!redirectUriAllowed(client, 'http://127.0.0.1:59123/other'), 'but the path is not');
   assert.ok(!redirectUriAllowed(client, 'http://localhost:59123/cb'), 'and nor is the host');
+
+  const native = { redirectUris: ['example-app:/oauth/callback'] };
+  assert.ok(redirectUriAllowed(native, 'example-app:/oauth/callback'), 'custom schemes are permitted by default');
+  assert.ok(
+    !redirectUriAllowed(native, 'example-app:/oauth/callback', ['https', 'http']),
+    'an explicit scheme allow list narrows the permissive default',
+  );
+});
+
+test('redirect URI scheme configuration is normalised and validated', () => {
+  const config = loadConfig({
+    SAG_ISSUER: 'http://localhost:8787',
+    CLIENTS_REDIRECT_URI_SCHEMES: 'HTTPS, example-app:',
+  });
+  assert.deepEqual(config.clients.redirectUriSchemes, ['https', 'example-app']);
+  assert.throws(
+    () => loadConfig({ SAG_ISSUER: 'http://localhost:8787', CLIENTS_REDIRECT_URI_SCHEMES: 'not/a/scheme' }),
+    /contains an invalid URI scheme/,
+  );
+});
+
+test('an authorisation request enforces the configured redirect scheme allow-list', async () => {
+  const config = loadConfig({
+    SAG_ISSUER: 'http://localhost:8787',
+    CLIENTS_REDIRECT_URI_SCHEMES: 'https,http',
+  });
+  const client = { clientId: 'native', redirectUris: ['example-app:/callback'], requirePkce: true };
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id: client.clientId,
+    redirect_uri: client.redirectUris[0],
+    scope: 'openid',
+    code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
+    code_challenge_method: 'S256',
+  });
+  await assert.rejects(
+    () => parseAuthorizationRequest(params, config, { resolveClient: async () => client }),
+    (error) => error.code === 'invalid_request' && error.redirectable === false && /allowed scheme/.test(error.description),
+  );
+});
+
+test('one client ACR floor cannot mutate the instance default for later clients', async () => {
+  const config = loadConfig({
+    SAG_ISSUER: 'http://localhost:8787',
+    ACR_DEFAULT_REQUIRED: ACR.OTP,
+  });
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id: 'one',
+    redirect_uri: 'https://one.test/cb',
+    scope: 'openid',
+    code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
+    code_challenge_method: 'S256',
+  });
+  const client = {
+    clientId: 'one',
+    redirectUris: ['https://one.test/cb'],
+    requirePkce: true,
+    acrValues: [ACR.FEDERATED_MFA],
+  };
+
+  const parsed = await parseAuthorizationRequest(params, config, { resolveClient: async () => client });
+  assert.deepEqual(parsed.request.acrValues, [ACR.OTP, ACR.FEDERATED_MFA]);
+  assert.deepEqual(config.acr.defaultRequired, [ACR.OTP], 'the shared configuration must stay unchanged');
+});
+
+test('an authorisation request cannot override the client signing algorithm', async () => {
+  const config = loadConfig({ SAG_ISSUER: 'http://localhost:8787' });
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id: 'one',
+    redirect_uri: 'https://one.test/cb',
+    scope: 'openid',
+    code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
+    code_challenge_method: 'S256',
+    id_token_signed_response_alg: 'ES256',
+  });
+  const client = {
+    clientId: 'one',
+    redirectUris: ['https://one.test/cb'],
+    requirePkce: true,
+    idTokenSignedResponseAlg: 'ML-DSA-44',
+  };
+
+  await assert.rejects(
+    () => parseAuthorizationRequest(params, config, { resolveClient: async () => client }),
+    (err) => err.code === 'invalid_request' && /does not match this client registration/.test(err.description),
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -85,7 +199,7 @@ test('a confidential client must present its secret, and a wrong one is refused'
   const sag = createInstance({
     CLIENT_APP_ID: DEV_CLIENT,
     CLIENT_APP_REDIRECT_URIS: DEV_REDIRECT,
-    CLIENT_APP_SECRET: 'the-real-secret',
+    CLIENT_APP_SECRET: 'The-Real-Secret',
     CLIENT_APP_AUTH_METHOD: 'client_secret_basic',
   });
 
@@ -108,9 +222,35 @@ test('a confidential client must present its secret, and a wrong one is refused'
   });
   assert.equal(wrong.status, 401);
 
-  const right = await sag.raw('/token', {
+  const wrongCase = await sag.raw('/token', {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded', authorization: basic('the-real-secret') },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: flow.authCode,
+      redirect_uri: DEV_REDIRECT,
+      code_verifier: flow.verifier,
+    }).toString(),
+  });
+  assert.equal(wrongCase.status, 401, 'plain client secrets are case-sensitive');
+
+  const wrongMethod = await sag.raw('/token', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: flow.authCode,
+      redirect_uri: DEV_REDIRECT,
+      code_verifier: flow.verifier,
+      client_id: DEV_CLIENT,
+      client_secret: 'The-Real-Secret',
+    }).toString(),
+  });
+  assert.equal(wrongMethod.status, 401, 'a basic client must not be accepted through client_secret_post');
+
+  const right = await sag.raw('/token', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', authorization: basic('The-Real-Secret') },
     body: new URLSearchParams({
       grant_type: 'authorization_code',
       code: flow.authCode,
@@ -127,6 +267,21 @@ test('a public client presenting a secret is refused', async () => {
   const { res, body } = await redeem(sag, { ...flow, extra: { client_secret: 'invented' } });
   assert.equal(res.status, 401);
   assert.match(body.error_description, /registered as public/);
+
+  const emptyBasic = await sag.raw('/token', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      authorization: 'Basic ' + Buffer.from(DEV_CLIENT + ':').toString('base64'),
+    },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: flow.authCode,
+      redirect_uri: DEV_REDIRECT,
+      code_verifier: flow.verifier,
+    }).toString(),
+  });
+  assert.equal(emptyBasic.status, 401, 'an empty Basic credential is still a credential');
 });
 
 test('two credentials at once are refused, because only one would be checked', async () => {
@@ -165,6 +320,7 @@ test('private_key_jwt authentication works, and a bad assertion is refused', asy
     CLIENT_APP_REDIRECT_URIS: DEV_REDIRECT,
     CLIENT_APP_JWKS: JSON.stringify({ keys: [publicJwk] }),
     CLIENT_APP_AUTH_METHOD: 'private_key_jwt',
+    STATE_STORE_BACKEND: 'memory',
   });
 
   const assertion = async (overrides = {}) => {
@@ -202,13 +358,19 @@ test('private_key_jwt authentication works, and a bad assertion is refused', asy
 
   // The happy path.
   const flow = await signInWithOtp(sag, { email: EMAIL });
-  const ok = await attempt(flow.authCode, flow.verifier, await assertion());
+  const usedAssertion = await assertion();
+  const ok = await attempt(flow.authCode, flow.verifier, usedAssertion);
   assert.equal(ok.status, 200, JSON.stringify(await ok.clone().json()));
 
-  // An assertion minted for a different identity provider must not work here.
-  // Each attempt needs its own code, and a fresh flow needs no session.
   sag.clearCookies();
-  const other = await signInWithOtp(sag, { email: EMAIL });
+  const replayFlow = await signInWithOtp(sag, { email: EMAIL });
+  const replayed = await attempt(replayFlow.authCode, replayFlow.verifier, usedAssertion);
+  assert.equal(replayed.status, 401);
+  assert.match((await replayed.json()).error_description, /already been used/);
+
+  // An assertion minted for a different identity provider must not work here.
+  // Failed client authentication has not consumed replayFlow's code.
+  const other = replayFlow;
   const wrongAud = await attempt(other.authCode, other.verifier, await assertion({ aud: 'https://another-idp.test' }));
   assert.equal(wrongAud.status, 401);
   assert.match((await wrongAud.json()).error_description, /not acceptable/);
@@ -222,6 +384,10 @@ test('private_key_jwt authentication works, and a bad assertion is refused', asy
   assert.equal(longLived.status, 401);
   assert.match((await longLived.json()).error_description, /lifetime/);
 
+  const missingIat = await attempt(other.authCode, other.verifier, await assertion({ iat: undefined }));
+  assert.equal(missingIat.status, 401, 'omitting iat must not bypass the lifetime ceiling');
+  assert.match((await missingIat.json()).error_description, /carry an iat/);
+
   // And one signed by a key the client never registered.
   const stranger = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
   const forged = await signCompact(
@@ -233,6 +399,33 @@ test('private_key_jwt authentication works, and a bad assertion is refused', asy
   const badSig = await attempt(other.authCode, other.verifier, forged);
   assert.equal(badSig.status, 401);
   assert.match((await badSig.json()).error_description, /signature/);
+});
+
+test('a JWK algorithm declaration constrains key selection even when kid matches', () => {
+  const jwks = { keys: [{ kid: 'shared-rsa-key', use: 'sig', alg: 'RS256' }] };
+  assert.throws(
+    () => selectJwk(jwks, { kid: 'shared-rsa-key', alg: 'PS256' }),
+    /no matching key/,
+  );
+});
+
+test('remote JWKS reads require TLS and have a hard size limit', async (t) => {
+  clearJwksCache();
+  await assert.rejects(() => fetchJwks('http://keys.example.test/jwks'), /must use https/);
+
+  const real = globalThis.fetch;
+  globalThis.fetch = async () => new Response(
+    JSON.stringify({ keys: [], padding: 'x'.repeat(270 * 1024) }),
+    { headers: { 'content-type': 'application/json' } },
+  );
+  t.after(() => {
+    globalThis.fetch = real;
+    clearJwksCache();
+  });
+  await assert.rejects(
+    () => fetchJwks('https://keys.example.test/jwks'),
+    /larger than 262144 bytes/,
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -272,6 +465,10 @@ const cimdConfig = (env = {}) =>
     ...env,
   });
 
+const PUBLIC_RESOLVER = {
+  resolve: async (_hostname, type) => (type === 'A' ? ['93.184.216.34'] : []),
+};
+
 test('a CIMD document may describe a distinct client and localhost redirect URI', async (t) => {
   clearCimdCache();
   const stub = serveCimd({
@@ -287,7 +484,7 @@ test('a CIMD document may describe a distinct client and localhost redirect URI'
     clearCimdCache();
   });
 
-  const client = await resolveClient(cimdConfig(), stub.url);
+  const client = await resolveClient(cimdConfig(), stub.url, { resolver: PUBLIC_RESOLVER });
   assert.equal(client.source, 'cimd');
   assert.equal(client.clientName, 'Example App');
   assert.equal(client.tokenEndpointAuthMethod, 'none', 'no keys means a public client');
@@ -305,12 +502,12 @@ test('CIMD can be restricted to particular domains, with or without subdomains',
   });
 
   await assert.rejects(
-    () => resolveClient(cimdConfig({ CLIENTS_CIMD_ALLOWED_DOMAINS: 'trusted.test' }), stub.url),
+    () => resolveClient(cimdConfig({ CLIENTS_CIMD_ALLOWED_DOMAINS: 'trusted.test' }), stub.url, { resolver: PUBLIC_RESOLVER }),
     /does not accept client metadata from/,
   );
 
   clearCimdCache();
-  const allowed = await resolveClient(cimdConfig({ CLIENTS_CIMD_ALLOWED_DOMAINS: 'example.test' }), stub.url);
+  const allowed = await resolveClient(cimdConfig({ CLIENTS_CIMD_ALLOWED_DOMAINS: 'example.test' }), stub.url, { resolver: PUBLIC_RESOLVER });
   assert.ok(allowed, 'app.example.test is a subdomain of example.test');
 
   clearCimdCache();
@@ -319,9 +516,51 @@ test('CIMD can be restricted to particular domains, with or without subdomains',
       resolveClient(
         cimdConfig({ CLIENTS_CIMD_ALLOWED_DOMAINS: 'example.test', CLIENTS_CIMD_ALLOW_SUBDOMAINS: 'false' }),
         stub.url,
+        { resolver: PUBLIC_RESOLVER },
       ),
     /does not accept client metadata from/,
   );
+});
+
+test('CIMD refuses literal and DNS-resolved private addresses outside development', async (t) => {
+  clearCimdCache();
+  const literal = serveCimd(
+    { redirect_uris: ['https://app.example.test/callback'] },
+    { url: 'https://127.0.0.1/client.json' },
+  );
+  t.after(() => {
+    literal.restore();
+    clearCimdCache();
+  });
+  await assert.rejects(
+    () => resolveClient(cimdConfig({ CLIENTS_CIMD_ALLOWED_DOMAINS: '' }), literal.url),
+    /public network address/,
+  );
+  assert.equal(literal.calls, 0, 'a private literal is rejected before fetch');
+
+  const privateDns = {
+    resolve: async (_hostname, type) => (type === 'A' ? ['93.184.216.34'] : ['fd00::7']),
+  };
+  await assert.rejects(
+    () => resolveClient(cimdConfig({ CLIENTS_CIMD_ALLOWED_DOMAINS: '' }), APP + '/client.json', { resolver: privateDns }),
+    /public network address/,
+  );
+  assert.equal(literal.calls, 0, 'a hostname with a private answer is rejected before fetch');
+});
+
+test('development CIMD may fetch localhost, but not an arbitrary private address', async (t) => {
+  clearCimdCache();
+  const localUrl = 'http://localhost/client.json';
+  const stub = serveCimd({ redirect_uris: ['http://localhost/callback'] }, { url: localUrl });
+  t.after(() => {
+    stub.restore();
+    clearCimdCache();
+  });
+  const dev = loadConfig({ SAG_ISSUER: 'http://localhost:8787', CLIENTS_CIMD_ENABLED: 'true' });
+  assert.ok(await resolveClient(dev, localUrl));
+
+  const privateUrl = 'http://10.0.0.7/client.json';
+  await assert.rejects(() => resolveClient(dev, privateUrl), /public network address/);
 });
 
 test('an oversized CIMD document is refused rather than parsed', async (t) => {
@@ -334,7 +573,10 @@ test('an oversized CIMD document is refused rather than parsed', async (t) => {
   const stub = serveCimd(big);
   t.after(stub.restore);
 
-  await assert.rejects(() => resolveClient(cimdConfig(), stub.url), /larger than this deployment accepts/);
+  await assert.rejects(
+    () => resolveClient(cimdConfig(), stub.url, { resolver: PUBLIC_RESOLVER }),
+    /larger than this deployment accepts/,
+  );
 });
 
 test('CIMD is disabled when the operator turns it off', async (t) => {
@@ -342,7 +584,7 @@ test('CIMD is disabled when the operator turns it off', async (t) => {
   const stub = serveCimd({ client_id: APP + '/client.json', redirect_uris: [APP + '/callback'] });
   t.after(stub.restore);
 
-  const client = await resolveClient(cimdConfig({ CLIENTS_CIMD_ENABLED: 'false' }), stub.url);
+  const client = await resolveClient(cimdConfig({ CLIENTS_CIMD_ENABLED: 'false' }), stub.url, { resolver: PUBLIC_RESOLVER });
   assert.equal(client, undefined);
   assert.equal(stub.calls, 0, 'and the document is not even fetched');
 });
@@ -356,8 +598,8 @@ test('a CIMD document is cached rather than refetched', async (t) => {
   });
 
   const config = cimdConfig();
-  await resolveClient(config, stub.url);
-  await resolveClient(config, stub.url);
+  await resolveClient(config, stub.url, { resolver: PUBLIC_RESOLVER });
+  await resolveClient(config, stub.url, { resolver: PUBLIC_RESOLVER });
   assert.equal(stub.calls, 1);
 });
 
@@ -401,6 +643,17 @@ test('a real deployment will not start without a salt to derive with', () => {
   const dev = loadConfig({ SAG_ISSUER: 'http://localhost:8787' });
   assert.deepEqual(dev.problems, []);
   assert.ok(dev.warnings.some((w) => /SUBJECT_SALT is not set; using the development salt/.test(w)));
+});
+
+test('an existing short subject salt warns but is not rejected or replaced', () => {
+  const config = loadConfig({
+    SAG_ISSUER: 'https://id.example.test',
+    SAG_SECRET: 'a'.repeat(48),
+    SUBJECT_SALT: 'short-salt',
+  });
+  assert.equal(config.subject.salt, 'short-salt');
+  assert.ok(config.internalWarnings.some((warning) => /shorter than 16 characters/.test(warning)));
+  assert.ok(!config.problems.some((problem) => /SUBJECT_SALT.*16/.test(problem)));
 });
 
 test('pairwise subjects differ per sector and need a salt', async () => {
@@ -530,6 +783,23 @@ test('a per-RP cookie name does not disclose which client it belongs to', async 
   assert.equal(names.length, 1);
   assert.match(names[0], /^sag_session_[A-Za-z0-9]+$/);
   assert.ok(!names[0].includes('recognisable'), 'the cookie jar must not enumerate applications used');
+});
+
+test('a per-client RP scope overrides a shared instance cookie', async () => {
+  const sag = createInstance({
+    SESSION_SCOPE: 'shared',
+    CLIENT_ONE_ID: 'client-one',
+    CLIENT_ONE_REDIRECT_URIS: 'https://one.test/cb',
+    CLIENT_ONE_SESSION_SCOPE: 'rp',
+  });
+  await signInWithOtp(sag, {
+    email: EMAIL,
+    authorize: { clientId: 'client-one', redirectUri: 'https://one.test/cb' },
+  });
+
+  const names = [...sag.cookies.keys()];
+  assert.equal(names.length, 1);
+  assert.match(names[0], /^sag_session_[A-Za-z0-9]+$/, 'the override must not fall back to the shared cookie');
 });
 
 test('shared sessions answer for every relying party', async () => {
@@ -707,7 +977,7 @@ test('turning opaque clients off leaves static and CIMD clients working', async 
   assert.equal(stat?.source, 'static');
 
   // A self-describing client still works, because it is not opaque.
-  const cimd = await resolveClient(config, stub.url, { store });
+  const cimd = await resolveClient(config, stub.url, { store, resolver: PUBLIC_RESOLVER });
   assert.equal(cimd?.source, 'cimd');
 
   // But a bare identifier does not reach the store at all.

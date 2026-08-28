@@ -306,6 +306,8 @@ test('the Lambda adapter returns cookies separately, not comma-joined', async (t
   assert.match(done.cookies[0], /^sag_session=/);
   assert.match(done.cookies[0], /HttpOnly/);
   assert.match(done.cookies[0], /SameSite=Lax/);
+  assert.match(done.cookies[0], /Secure/);
+  assert.match(done.cookies[0], /Path=\//);
 });
 
 test('the Lambda adapter reads cookies back out of the v2 cookies array', async (t) => {

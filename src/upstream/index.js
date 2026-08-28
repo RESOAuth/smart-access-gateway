@@ -10,14 +10,51 @@
 // the `state` parameter, which is what the brief means by relaying user
 // information through OAuth state. Nothing is written down on our side.
 
-import { fetchWithTimeout } from '../util/http.js';
-import { b64u, randomToken, nowSeconds } from '../util/bytes.js';
+import { fetchWithTimeout, readJsonLimited } from '../util/http.js';
+import { randomToken, nowSeconds } from '../util/bytes.js';
 import { sha256b64u } from '../crypto/secrets.js';
 import { fetchJwks, selectJwk, verifyCompact, decodeJwt, validateClaims } from '../crypto/jose.js';
 import { domainOf, normaliseEmail } from '../identity.js';
 import { providerFor, labelFor } from './providers.js';
 
 const metadataCache = new Map();
+const MAX_METADATA_CACHE_ENTRIES = 100;
+const MAX_DISCOVERY_BYTES = 64 * 1024;
+const MAX_TOKEN_RESPONSE_BYTES = 64 * 1024;
+
+function checkedRemoteUrl(value, label, allowHttp) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(label + ' is not an absolute URL');
+  }
+  if (url.username || url.password || (url.protocol !== 'https:' && !(allowHttp && url.protocol === 'http:'))) {
+    throw new Error(label + ' must use https');
+  }
+  return url.href;
+}
+
+function checkMetadata(upstream, metadata, allowHttp) {
+  checkedRemoteUrl(metadata.issuer, 'upstream ' + upstream.id + ' issuer', allowHttp);
+  for (const field of ['authorization_endpoint', 'token_endpoint', 'jwks_uri']) {
+    metadata[field] = checkedRemoteUrl(metadata[field], 'upstream ' + upstream.id + ' ' + field, allowHttp);
+  }
+  return metadata;
+}
+
+function rememberMetadata(url, metadata, ttlSeconds) {
+  const now = nowSeconds();
+  for (const [key, entry] of metadataCache) {
+    if (entry.expiresAt <= now) metadataCache.delete(key);
+  }
+  metadataCache.delete(url);
+  if (metadataCache.size >= MAX_METADATA_CACHE_ENTRIES) {
+    const oldest = metadataCache.keys().next().value;
+    if (oldest !== undefined) metadataCache.delete(oldest);
+  }
+  metadataCache.set(url, { metadata, expiresAt: now + ttlSeconds });
+}
 
 /**
  * Fetch and cache an upstream's OpenID Connect metadata.
@@ -26,44 +63,45 @@ const metadataCache = new Map();
  * supplies the issuer and the JWKS URI, and getting either of those wrong is
  * the difference between validating an id_token and pretending to.
  */
-export async function upstreamMetadata(upstream, { ttlSeconds = 3600 } = {}) {
+export async function upstreamMetadata(upstream, { ttlSeconds = 3600, allowHttp = false } = {}) {
   const provider = providerFor(upstream.provider);
   const explicit =
     upstream.authorizationEndpoint && upstream.tokenEndpoint && upstream.jwksUri && upstream.issuer;
   if (explicit && upstream.useDiscovery !== true) {
-    return {
+    return checkMetadata(upstream, {
       issuer: upstream.issuer,
       authorization_endpoint: upstream.authorizationEndpoint,
       token_endpoint: upstream.tokenEndpoint,
       jwks_uri: upstream.jwksUri,
-    };
+    }, allowHttp);
   }
 
-  const url = provider.discoveryUrl(upstream);
-  if (!url) {
+  const discoveredAt = provider.discoveryUrl(upstream);
+  if (!discoveredAt) {
     throw new Error(
       'upstream ' + upstream.id + ' needs either an ISSUER to discover from or all of its endpoints set explicitly',
     );
   }
+  const url = checkedRemoteUrl(discoveredAt, 'upstream ' + upstream.id + ' discovery URL', allowHttp);
   const cached = metadataCache.get(url);
   if (cached && cached.expiresAt > nowSeconds()) return cached.metadata;
 
   const res = await fetchWithTimeout(url, { headers: { accept: 'application/json' } }, 5000);
   if (!res.ok) throw new Error('upstream discovery for ' + upstream.id + ' failed with HTTP ' + res.status);
-  const metadata = await res.json();
+  const metadata = await readJsonLimited(res, MAX_DISCOVERY_BYTES);
   for (const field of ['authorization_endpoint', 'token_endpoint', 'jwks_uri', 'issuer']) {
     if (!metadata[field]) throw new Error('upstream ' + upstream.id + ' discovery document has no ' + field);
   }
   // Explicit configuration still wins over a discovered value, so an operator
   // can point at a proxy or a regional endpoint.
-  const merged = {
+  const merged = checkMetadata(upstream, {
     ...metadata,
     issuer: upstream.issuer || metadata.issuer,
     authorization_endpoint: upstream.authorizationEndpoint || metadata.authorization_endpoint,
     token_endpoint: upstream.tokenEndpoint || metadata.token_endpoint,
     jwks_uri: upstream.jwksUri || metadata.jwks_uri,
-  };
-  metadataCache.set(url, { metadata: merged, expiresAt: nowSeconds() + ttlSeconds });
+  }, allowHttp);
+  rememberMetadata(url, merged, ttlSeconds);
   return merged;
 }
 
@@ -106,7 +144,7 @@ export function upstreamsFor(config, email) {
  */
 export async function beginUpstream(ctx, upstream, tx, { hinted = false } = {}) {
   const { config } = ctx;
-  const metadata = await upstreamMetadata(upstream);
+  const metadata = await upstreamMetadata(upstream, { allowHttp: config.devMode });
   const provider = providerFor(upstream.provider);
 
   const verifier = randomToken(32);
@@ -175,7 +213,7 @@ function upstreamPrompt(upstream, tx) {
  */
 export async function completeUpstream(ctx, upstream, { code, stateTx }) {
   const { config } = ctx;
-  const metadata = await upstreamMetadata(upstream);
+  const metadata = await upstreamMetadata(upstream, { allowHttp: config.devMode });
   const provider = providerFor(upstream.provider);
 
   const body = new URLSearchParams({
@@ -196,7 +234,7 @@ export async function completeUpstream(ctx, upstream, { code, stateTx }) {
     { method: 'POST', headers, body: body.toString() },
     8000,
   );
-  const payload = await res.json().catch(() => ({}));
+  const payload = await readJsonLimited(res, MAX_TOKEN_RESPONSE_BYTES).catch(() => ({}));
   if (!res.ok) {
     const detail = payload.error_description || payload.error || 'HTTP ' + res.status;
     throw new Error('upstream token exchange failed: ' + detail);
@@ -207,6 +245,7 @@ export async function completeUpstream(ctx, upstream, { code, stateTx }) {
     nonce: stateTx.upstream.nonce,
     clockSkew: config.tokens.clockSkewSeconds,
     maxAge: stateTx.max_age,
+    allowHttp: config.devMode,
   });
   provider.verifyClaims(upstream, claims);
 
@@ -231,9 +270,9 @@ export async function completeUpstream(ctx, upstream, { code, stateTx }) {
   return { email, claims, upstream };
 }
 
-async function verifyUpstreamIdToken(upstream, metadata, token, { nonce, clockSkew, maxAge }) {
+async function verifyUpstreamIdToken(upstream, metadata, token, { nonce, clockSkew, maxAge, allowHttp }) {
   const { header } = decodeJwt(token);
-  const jwks = await fetchJwks(metadata.jwks_uri);
+  const jwks = await fetchJwks(metadata.jwks_uri, { allowHttp });
   const jwk = selectJwk(jwks, header);
   const claims = await verifyCompact(token, jwk, {
     algs: ['ES256', 'ES384', 'RS256', 'PS256', 'ML-DSA-44', 'ML-DSA-65', 'ML-DSA-87'],

@@ -11,6 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createInstance, signInWithOtp, redeem, pkce, authorizeUrl, extractField } from './harness.js';
 import { seal, unseal, SealError } from '../src/crypto/secrets.js';
+import { loadConfig } from '../src/config.js';
 
 const OLD = 'old-master-secret-'.repeat(3);
 const NEW = 'new-master-secret-'.repeat(3);
@@ -119,4 +120,20 @@ test('a token cannot be replayed into a different purpose after a rotation', asy
   await assert.rejects(() => unseal([NEW, OLD], 'session', sealed), SealError);
   await assert.rejects(() => unseal([NEW, OLD], 'code', sealed), SealError);
   assert.deepEqual(await unseal([NEW, OLD], 'tx', sealed), { hello: 'world' });
+});
+
+test('a previous secret cannot become the current key or weaken a rotation', () => {
+  const previousOnly = loadConfig({
+    SAG_ISSUER: 'https://id.example.test',
+    SAG_SECRET_PREVIOUS: OLD,
+  });
+  assert.ok(previousOnly.problems.some((p) => /SAG_SECRET_PREVIOUS cannot be used without SAG_SECRET/.test(p)));
+  assert.notEqual(previousOnly.secrets[0], OLD, 'a previous key must never become the sealing key');
+
+  const weakPrevious = loadConfig({
+    SAG_ISSUER: 'https://id.example.test',
+    SAG_SECRET: NEW,
+    SAG_SECRET_PREVIOUS: 'weak',
+  });
+  assert.ok(weakPrevious.problems.some((p) => /SAG_SECRET_PREVIOUS must be at least 32 characters/.test(p)));
 });

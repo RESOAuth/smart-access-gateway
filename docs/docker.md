@@ -180,9 +180,7 @@ from the Linux terminal works, which makes it look like a browser problem.
 
 Two ways round it:
 
-```
-http://penguin.linux.test:8787/healthz
-```
+`http://penguin.linux.test:8787/healthz`
 
 ChromeOS resolves `<container>.linux.test` to the Linux VM, so this reaches
 SAG with no configuration at all. `penguin` is the default container name;

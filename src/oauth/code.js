@@ -80,7 +80,7 @@ export async function redeemCode(config, { code, clientId, redirectUri, codeVeri
   }
   // The redirect URI must be presented again and match, so a code intercepted
   // at one registered URI cannot be redeemed as though it came from another.
-  if (redirectUri !== undefined && payload.redirect_uri !== redirectUri) {
+  if (!redirectUri || payload.redirect_uri !== redirectUri) {
     throw invalidGrant('The redirect_uri does not match the one used to obtain this code.');
   }
 
@@ -96,7 +96,7 @@ export async function redeemCode(config, { code, clientId, redirectUri, codeVeri
   }
 
   if (replayStore) {
-    const fresh = await replayStore.claim(payload.jti, payload.exp - nowSeconds() + 60);
+    const fresh = await replayStore.claim('authorization-code:' + payload.jti, payload.exp - nowSeconds() + 60);
     if (!fresh) throw invalidGrant('This authorization code has already been used.');
   }
 

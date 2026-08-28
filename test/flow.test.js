@@ -77,6 +77,18 @@ test('a code is bound to the client and the redirect URI it was issued for', asy
   const wrongClient = await redeem(sag, { ...flow, clientId: 'other-client' });
   assert.equal(wrongClient.body.error, 'invalid_grant');
 
+  const missingRedirect = await sag.raw('/token', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: flow.authCode,
+      client_id: DEV_CLIENT,
+      code_verifier: flow.verifier,
+    }).toString(),
+  });
+  assert.equal((await missingRedirect.json()).error, 'invalid_grant', 'redirect_uri must be repeated at /token');
+
   const wrongRedirect = await redeem(sag, { ...flow, redirectUri: 'http://localhost:8788/callback' });
   assert.equal(wrongRedirect.body.error, 'invalid_grant');
 });

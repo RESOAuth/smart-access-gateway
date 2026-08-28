@@ -69,7 +69,8 @@ migrate, and that layer was built to be swapped - see
    is still ES256, and the new public key simply appears in the JWKS.
 2. Relying parties that are ready start sending
    `id_token_signed_response_alg=ML-DSA-44`, or have it set on their client
-   record. They get post-quantum signatures; everybody else does not.
+   record. A registered value cannot be overridden by a request. They get
+   post-quantum signatures; everybody else does not.
 3. When enough have moved, swap `SIGNING_ALG` and `SIGNING_ADDITIONAL_ALGS`
    round so the post-quantum key becomes primary. The classical key stays
    published, so nothing breaks.

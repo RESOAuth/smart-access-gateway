@@ -5,6 +5,9 @@ export const SECURITY_HEADERS = {
   'referrer-policy': 'no-referrer',
   'x-frame-options': 'DENY',
   'cross-origin-opener-policy': 'same-origin',
+  // Browsers ignore this over plain HTTP, so local development remains local
+  // while a real deployment remembers that this identity origin is TLS-only.
+  'strict-transport-security': 'max-age=31536000',
 };
 
 const NO_STORE = { 'cache-control': 'no-store', pragma: 'no-cache' };

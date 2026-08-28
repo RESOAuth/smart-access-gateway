@@ -23,7 +23,7 @@ export default {
     } catch (err) {
       // A throw here means the router itself failed, which is a bug. Log it
       // where wrangler tail will show it and answer with nothing useful.
-      console.error('[sag] unhandled: ' + (err?.stack || err));
+      console.error('[sag] unhandled: ' + (err?.stack || err) + ' ' + JSON.stringify(ctx));
       return new Response('Internal error', {
         status: 500,
         headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },

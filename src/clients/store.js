@@ -6,7 +6,7 @@
 // the records is somebody else's problem, which keeps the identity path free
 // of write credentials.
 
-import { fetchWithTimeout } from '../util/http.js';
+import { fetchWithTimeout, readJsonLimited } from '../util/http.js';
 import { signRequest, credentialsFromEnv } from '../crypto/sigv4.js';
 import { nowSeconds } from '../util/bytes.js';
 
@@ -21,6 +21,8 @@ function fromRecord(clientId, doc) {
   if (!doc || typeof doc !== 'object') return undefined;
   const redirectUris = doc.redirect_uris || doc.redirectUris || [];
   if (!Array.isArray(redirectUris) || redirectUris.length === 0) return undefined;
+  const sessionScope = doc.session_scope || doc.sessionScope;
+  if (sessionScope !== undefined && sessionScope !== 'shared' && sessionScope !== 'rp') return undefined;
   return {
     clientId,
     clientName: doc.client_name || doc.clientName,
@@ -38,7 +40,7 @@ function fromRecord(clientId, doc) {
     scopes: typeof doc.scope === 'string' ? doc.scope.split(/\s+/).filter(Boolean) : doc.scopes,
     acrValues: doc.acr_values || doc.acrValues || [],
     idTokenSignedResponseAlg: doc.id_token_signed_response_alg || doc.idTokenSignedResponseAlg,
-    sessionScope: doc.session_scope || doc.sessionScope,
+    sessionScope,
     subjectType: doc.subject_type || doc.subjectType,
     sectorIdentifier: doc.sector_identifier || doc.sectorIdentifier,
     // Tri-state: absent means the instance default, which is not the same
@@ -63,6 +65,7 @@ function fromRecord(clientId, doc) {
 // what an instance sees if its very first lookup lands while the store is still
 // being populated. Ten seconds is still ample protection against a flood.
 const MISS_TTL_SECONDS = 10;
+const MAX_S3_RECORD_BYTES = 64 * 1024;
 
 // A cap, because the keys are attacker-chosen: every /authorize with an
 // invented client_id is a negative entry, and an unbounded map would make a
@@ -161,7 +164,7 @@ function createS3Store(config, env) {
     const res = await fetchWithTimeout(url, { method: 'GET', headers }, 4000);
     if (res.status === 404 || res.status === 403) return undefined;
     if (!res.ok) throw new Error('client store read failed with HTTP ' + res.status);
-    return fromRecord(clientId, await res.json());
+    return fromRecord(clientId, await readJsonLimited(res, MAX_S3_RECORD_BYTES));
   };
 }
 

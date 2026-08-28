@@ -16,9 +16,7 @@ to the console instead of sent.
 
 Point any OpenID Connect client library at:
 
-```
-http://127.0.0.1:8787/.well-known/openid-configuration
-```
+`http://127.0.0.1:8787/.well-known/openid-configuration`
 
 The moment `SAG_ISSUER` names a real hostname, every development default
 becomes a startup error rather than a quiet weakness: no signing key, no

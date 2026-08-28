@@ -27,7 +27,6 @@ ongoing maintenance). An RFC is allowed to leave things open; an ADR is not.
 | [0002](0002-refresh-tokens-backed-by-upstream.md) | Refresh tokens, backed by the upstream token |
 | [0003](0003-otp-send-burst-sizing.md) | Whether the OTP send-burst size is right |
 | [0004](0004-per-relying-party-otp-policy.md) | Per-relying-party OTP policy |
-| [0005](0005-store-backed-session-index.md) | A store-backed session index, for sign-out everywhere |
 | [0006](0006-live-upstream-testing.md) | Live upstream testing against Microsoft and Google |
 | [0007](0007-screen-reader-accessibility-review.md) | Accessibility review with a real screen reader |
 | [0008](0008-translation.md) | Translation of user-facing strings |

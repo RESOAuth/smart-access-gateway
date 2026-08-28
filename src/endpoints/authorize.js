@@ -24,7 +24,7 @@ import {
   STAGE,
 } from '../oauth/transaction.js';
 import { issueCode } from '../oauth/code.js';
-import { readSession, newSession, reauthenticate, sessionCookie, sessionIsFresh } from '../session.js';
+import { readSession, newSession, reauthenticate, sessionCookie, sessionIsFresh, sessionClientFor } from '../session.js';
 import { subjectFor, identityEmail, normaliseEmail, looksLikeEmail, emailTag } from '../identity.js';
 import { satisfies, requiresFederation, acrFromUpstream, acrForOtp } from '../acr.js';
 import { generateCode, digestCode, verifyCode, otpAllowed, alphabetFor } from '../otp.js';
@@ -70,15 +70,9 @@ export async function handleAuthorize(ctx) {
     tos_uri: client.tosUri,
     policy_uri: client.policyUri,
   });
-  const session = await readSession(config, request, effectiveSessionClient(config, client));
+  const session = await readSession(config, request, sessionClientFor(config, client), ctx.stateStore);
 
   return decide(ctx, { tx, client, session });
-}
-
-/** Which client id scopes the session cookie, if any. */
-function effectiveSessionClient(config, client) {
-  const scope = client.sessionScope || config.session.scope;
-  return scope === 'rp' ? client.clientId : undefined;
 }
 
 /**
@@ -486,7 +480,12 @@ export async function handleOtpSubmit(ctx) {
   // guess. What is guessed, and whether anything is, is the operator's call;
   // see src/profile.js.
   const sessionArgs = { email: tx.email, acr, amr, claims: inferredClaims(ctx.config, tx.email) };
-  const existing = await readSession(ctx.config, ctx.request, effectiveSessionClient(ctx.config, client));
+  const existing = await readSession(
+    ctx.config,
+    ctx.request,
+    sessionClientFor(ctx.config, client),
+    ctx.stateStore,
+  );
   const session =
     existing && existing.email === tx.email
       ? reauthenticate(ctx.config, existing, sessionArgs)
@@ -509,7 +508,12 @@ export async function handleContinue(ctx) {
   const loaded = await loadTransaction(ctx);
   if (loaded.fail) return loaded.fail;
   const { tx, client } = loaded;
-  const session = await readSession(ctx.config, ctx.request, effectiveSessionClient(ctx.config, client));
+  const session = await readSession(
+    ctx.config,
+    ctx.request,
+    sessionClientFor(ctx.config, client),
+    ctx.stateStore,
+  );
   if (!session) return renderEmail(ctx, { tx });
   if (!sessionIsFresh(session, { maxAge: tx.max_age, clockSkew: ctx.config.tokens.clockSkewSeconds })) {
     return renderEmail(ctx, { tx, email: session.email });
@@ -629,7 +633,12 @@ export async function handleCallback(ctx) {
     upstreamLabel: labelFor(upstream),
     claims: relayedClaims(ctx.config, outcome.claims, upstreamAcr),
   };
-  const existing = await readSession(ctx.config, ctx.request, effectiveSessionClient(ctx.config, client));
+  const existing = await readSession(
+    ctx.config,
+    ctx.request,
+    sessionClientFor(ctx.config, client),
+    ctx.stateStore,
+  );
   const session =
     existing && existing.email === outcome.email
       ? reauthenticate(ctx.config, existing, sessionArgs)
@@ -637,6 +646,7 @@ export async function handleCallback(ctx) {
 
   // The transaction that comes back from the callback still carries the
   // upstream leg; strip it before it becomes a code.
+  // eslint-disable-next-line no-unused-vars
   const { upstream: _leg, ...tx } = stateTx;
   return complete(ctx, { tx, client, session, refreshCookie: true });
 }
@@ -706,7 +716,7 @@ async function complete(ctx, { tx, client, session, refreshCookie }) {
   });
   let response = authorizationResponse(ctx, tx, code);
   if (refreshCookie) {
-    const cookie = await sessionCookie(ctx.config, session, effectiveSessionClient(ctx.config, client));
+    const cookie = await sessionCookie(ctx.config, session, sessionClientFor(ctx.config, client));
     response = withCookie(response, cookie);
   }
   return response;

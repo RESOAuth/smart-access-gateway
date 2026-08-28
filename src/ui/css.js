@@ -145,7 +145,7 @@ h1 {
 .lede strong { color: var(--ink); font-weight: 600; }
 
 .client-logo { margin: 0 0 1rem; }
-.client-logo img { display: block; max-width: 7.5rem; max-height: 1.5rem; width: auto; height: auto; }
+.client-logo img { display: block; max-width: 7.5rem; max-height: 2.5rem; width: auto; height: auto; margin: 0 auto; }
 
 form { margin: 0; }
 

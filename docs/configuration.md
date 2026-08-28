@@ -14,7 +14,7 @@ Relying party and upstream provider variables have their own pages:
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `SAG_ISSUER` | derived from the request in development | The `iss` claim and the base for every URL. No trailing slash, no query |
-| `SAG_SECRET` | a well-known development value | Master secret. 48 random bytes. Protects sessions, transactions and codes |
+| `SAG_SECRET` | a well-known development value | Master secret. 48 random bytes, unique to this issuer. Protects sessions, transactions and codes |
 | `SAG_SECRET_PREVIOUS` | - | The secret being retired, so a rotation does not sign everybody out. See [operations.md](operations.md) |
 | `SAG_DEV` | true for localhost, `.localhost`, `.local` and `.linux.test` issuers | Forces development mode on or off |
 | `LOG_LEVEL` | `debug` in development, `info` otherwise | `debug`, `info`, `warn`, `error`, `silent` |
@@ -55,7 +55,7 @@ fully as this instance's own.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `SESSION_SCOPE` | `shared` | `shared` for one session across every relying party, `rp` for one each |
-| `SESSION_COOKIE_NAME` | `sag_session` | |
+| `SESSION_COOKIE_NAME` | `sag_session` in development, `__Host-sag_session` otherwise | Production prefixes a custom name too, and uses `Secure; Path=/` as the prefix requires |
 | `SESSION_TTL` | `43200` (12 hours) | Idle timeout |
 | `SESSION_MAX_LIFETIME` | `604800` (7 days) | Absolute lifetime, regardless of activity |
 | `PROMPT_NONE_SHARED_SESSION` | `true` | Whether `prompt=none` may be answered from the shared session when sessions are per relying party |
@@ -72,7 +72,7 @@ fully as this instance's own.
 | `ACCESS_TOKEN_TTL` | `600` | The access token is only accepted by SAG's own `/userinfo` |
 | `CLOCK_SKEW` | `60` | Tolerance when checking times |
 | `SUBJECT_TYPE` | `public` | `public` gives every relying party the same `sub`, an HKDF of `SUBJECT_SALT` over the string `public` and the address; `pairwise` gives each one a different `sub`, the same HKDF with the relying party's sector in place of `public` |
-| `SUBJECT_SALT` | - | Always required; development falls back to a well-known salt and says so. **Rotation warning**: a new salt orphans every account at every relying party |
+| `SUBJECT_SALT` | - | Always required; development falls back to a well-known salt and says so. Values shorter than 16 characters warn but remain unchanged. **Rotation warning**: a new salt orphans every account at every relying party |
 | `SANITISE_PLUS_EMAILS` | `true` | Treat `jamie+shop@example.com` as `jamie@example.com` for identity: one mailbox, one person. Overridable per relying party with `CLIENT_<SLUG>_SANITISE_PLUS_EMAILS` |
 
 A `sub` is derived from the verified email address, never from the upstream's
@@ -94,6 +94,36 @@ one does not orphan anybody. The salt is the only thing that must never change.
 untagged mailbox, whatever it is set to, because otherwise a new tag on every
 attempt would walk straight past them.
 
+## Cross-origin requests (CORS)
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `CORS_ENABLED` | `true` | Whether `/token` and `/userinfo` carry CORS headers at all |
+| `CORS_ALLOWED_ORIGINS` | - | Comma or space separated browser origins to trust *in addition to* every client's registered redirect URIs, or `*` for every origin |
+
+Neither endpoint relies on the session cookie - a `/token` request is bound to
+its authorization code by PKCE, and `/userinfo` is bound to its caller by the
+bearer access token - so there is nothing here for a third-party origin to
+ride on. By default every origin among the statically configured clients' own
+`CLIENT_<SLUG>_REDIRECT_URIS` (`https`, or `http` in development) is trusted
+to read these two responses with `fetch()`: a public single-page application
+already registered that origin the moment its redirect URI was, so this is
+not a new decision, just not making the relying party's own JavaScript ask
+its backend to do what its backend never needed to do in the first place.
+
+A client that exists only in a client store or as a CIMD document is not
+known at start-up, so its origin is not covered automatically - name it with
+`CORS_ALLOWED_ORIGINS` instead. Set `CORS_ENABLED=false` to turn this off
+entirely, the same as leaving both variables unset used to mean: a relying
+party can still redeem a code or read a token from its own backend, just not
+from JavaScript running on a page. An explicit `CORS_ALLOWED_ORIGINS` entry
+must be exactly an origin - scheme, host and port, no path - and `https`
+outside development.
+
+Every other route, including the hosted sign-in pages, never carries a CORS
+header at all: they are reached by navigation and depend on the session
+cookie, which is a browser-enforced, same-origin thing already.
+
 ## The state store
 
 See [state-and-limits.md](state-and-limits.md) for what it is for and which
@@ -104,7 +134,7 @@ backend to pick.
 | `STATE_STORE_BACKEND` | `none` | `none`, `memory`, `cf-durable-object`, `dynamodb` |
 | `STATE_STORE_DO_BINDING` | `SAG_STATE` | Durable Object namespace binding |
 | `STATE_STORE_TABLE`, `STATE_STORE_REGION` | - | With `dynamodb` |
-| `STATE_STORE_MAX_ENTRIES` | `10000` | Cap on the in-memory backend. A full store refuses a code claim rather than forgetting one |
+| `STATE_STORE_MAX_ENTRIES` | `10000` | Cap on the in-memory backend. A full store refuses a code or client assertion claim rather than forgetting one |
 | `REQUIRE_STATE_STORE` | `false` | Refuse to start unless `STATE_STORE_BACKEND` names a real backend, so a template or a Terraform refactor cannot drop it silently |
 
 The older `REPLAY_STORE_*` names still work and mean the same thing.
@@ -179,8 +209,9 @@ bucket, all of it local.
 | `CLIENTS_STORE_PREFIX` | `clients/`, or empty with `file` | Key prefix within the store |
 | `CLIENTS_STORE_CACHE_TTL` | `60` | Seconds a record is cached. "No such client" is cached too, but for at most ten seconds, so a record added a moment ago is not refused for a minute |
 | `CLIENTS_OPAQUE_ENABLED` | `true` | Whether store-held clients are accepted at all |
+| `CLIENTS_REDIRECT_URI_SCHEMES` | `*` | Comma or space separated schemes accepted for authorisation and post-logout redirects, without the colon, or `*` for any. Exact registered URI matching still applies |
 | `CLIENTS_CIMD_ENABLED` | Development mode | Client ID Metadata Documents. Production deployments must enable it explicitly. |
-| `CLIENTS_CIMD_ALLOWED_DOMAINS` | - | Required when CIMD is enabled outside development mode. Each listed domain may declare its own redirect URIs. |
+| `CLIENTS_CIMD_ALLOWED_DOMAINS` | - | Optional additional allow-list. Empty accepts any public host; every listed domain may declare its own redirect URIs. |
 | `CLIENTS_CIMD_ALLOW_SUBDOMAINS` | `true` | |
 | `CLIENTS_CIMD_CACHE_TTL` | `300` | |
 | `CLIENTS_CIMD_MAX_BYTES` | `32768` | Size cap on a fetched document |
@@ -237,7 +268,7 @@ See [upstreams.md](upstreams.md).
 
 The values SAG understands, weakest first:
 
-```
+``` ascii
 urn:sag:acr:email-otp        a code sent to an address
 urn:sag:acr:federated        an upstream identity provider
 urn:sag:acr:federated-mfa    the upstream reported multi-factor

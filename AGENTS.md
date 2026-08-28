@@ -13,8 +13,8 @@ Worker, an AWS Lambda, or a plain Node process from the same core.
 - **No database.** A session, an in-flight authorisation request and an
   authorisation code are all encrypted values the browser or upstream
   carries back, sealed with a shared secret (AES-256-GCM + HKDF-SHA-256).
-  One optional shared store (`STATE_STORE_BACKEND`) adds single-use codes
-  and OTP send limits when a deployment wants them - see
+  One optional shared store (`STATE_STORE_BACKEND`) adds single-use codes and
+  client assertions, and OTP send limits when a deployment wants them - see
   [docs/adr/0001](docs/adr/0001-stateless-with-optional-state-store.md).
 - **Algorithm-agile signing** (`src/keys/`): one interface over a local key,
   AWS KMS and a Cloudflare HSM Worker; a signer set can publish several
@@ -88,5 +88,5 @@ Worker, an AWS Lambda, or a plain Node process from the same core.
 
 ## Before calling anything done
 
-Run `npm test`. It has no build step and no external dependencies for the
-core suite, so there is no excuse for skipping it.
+Run `npm install` once to fetch the test dependencies, then run `npm test`.
+There is no build step, so there is no excuse for skipping it.

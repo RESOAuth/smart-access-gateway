@@ -5,6 +5,7 @@
 // abstract over.
 
 import { json, text, methodNotAllowed, SECURITY_HEADERS } from './util/http.js';
+import { corsPreflight, withCors } from './util/cors.js';
 import { OAuthError, UserFacingError } from './util/errors.js';
 import { ConfigError } from './config.js';
 import { createContext } from './context.js';
@@ -52,8 +53,11 @@ const ROUTES = [
   { path: '/authorize/upstream', methods: ['POST'], handler: handleChooseUpstream },
   { path: '/callback', methods: ['GET'], handler: handleCallback },
 
-  { path: '/token', methods: ['POST'], handler: handleToken },
-  { path: '/userinfo', methods: ['GET', 'POST'], handler: handleUserinfo },
+  // A browser-based relying party calls these two directly with fetch(), so
+  // unlike every other route here they carry CORS headers - see
+  // src/util/cors.js and CORS_ALLOWED_ORIGINS.
+  { path: '/token', methods: ['POST'], handler: handleToken, cors: true },
+  { path: '/userinfo', methods: ['GET', 'POST'], handler: handleUserinfo, cors: true },
   { path: '/logout', methods: ['GET', 'POST'], handler: handleLogout },
   { path: '/healthz', methods: ['GET'], handler: handleHealth },
   { path: '/static/sag.css', methods: ['GET'], handler: handleStylesheet },
@@ -166,15 +170,28 @@ export async function handleRequest(request, env, opts = {}) {
     }
     return text('Not found', 404);
   }
+  // A preflight is answered ahead of the method check: OPTIONS is never in a
+  // route's own methods list, and a browser sends this before the request it
+  // is actually asking about, so nothing past "is this route CORS-enabled"
+  // needs to run.
+  if (request.method === 'OPTIONS' && route.cors) {
+    return corsPreflight(ctx);
+  }
   if (!route.methods.includes(request.method)) {
     return methodNotAllowed(route.methods);
   }
 
   try {
-    return withPolicy(ctx, await route.handler(ctx));
+    return finish(ctx, route, await route.handler(ctx));
   } catch (err) {
-    return withPolicy(ctx, handleFailure(ctx, err));
+    return finish(ctx, route, handleFailure(ctx, err));
   }
+}
+
+/** Headers common to every response for a route, whether it succeeded or not. */
+function finish(ctx, route, response) {
+  const withCsp = withPolicy(ctx, response);
+  return route.cors ? withCors(ctx, withCsp) : withCsp;
 }
 
 /**

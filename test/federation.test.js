@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createInstance, pkce, authorizeUrl, extractField, redeem, DEV_CLIENT } from './harness.js';
 import { createStubProvider, readUpstreamRedirect } from './upstream-stub.js';
-import { clearUpstreamMetadataCache } from '../src/upstream/index.js';
+import { clearUpstreamMetadataCache, upstreamMetadata } from '../src/upstream/index.js';
 import { clearJwksCache, verifyCompact, decodeJwt } from '../src/crypto/jose.js';
 import { ACR } from '../src/acr.js';
 
@@ -351,4 +351,16 @@ test('the upstream discovery document is fetched once and cached', async (t) => 
   await untilUpstream(sag, { email: 'one@acme.test' });
   await untilUpstream(sag, { email: 'two@acme.test' });
   assert.equal(stub.state.discoveryCount, 1, 'discovery must not repeat per request');
+});
+
+test('an oversized upstream discovery response is refused before parsing', async (t) => {
+  clearUpstreamMetadataCache();
+  const stub = await createStubProvider({ metadata: { padding: 'x'.repeat(70 * 1024) } });
+  const restore = stub.install();
+  t.after(restore);
+
+  await assert.rejects(
+    () => upstreamMetadata({ id: 'oidc/acme', provider: 'oidc', issuer: stub.issuer }),
+    /larger than 65536 bytes/,
+  );
 });

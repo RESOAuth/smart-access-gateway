@@ -23,7 +23,7 @@ export async function handleToken(ctx) {
   const clientId = requireClientId(credentials);
   const client = await ctx.resolveClient(clientId);
   if (!client) throw invalidClient('No client is registered with that client_id here.');
-  await authenticateClient(ctx.config, client, credentials);
+  await authenticateClient(ctx.config, client, credentials, ctx.stateStore);
 
   const code = single(params, 'code');
   if (!code) throw invalidGrant('The code parameter is missing.');

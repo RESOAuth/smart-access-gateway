@@ -7,6 +7,10 @@ wrong. Each one states what breaks if it is done in the wrong order.
 
 `SAG_SECRET` protects sessions, in-flight transactions, authorisation codes and
 access tokens. Rotating it is routine and does not have to sign anybody out.
+Never reuse it for a different issuer: sealed values are purpose-bound, but are
+not bound to an issuer name. This is an explicit decision rather than a pending
+migration - see
+[ADR 0014](adr/0014-sealed-values-remain-independent-of-the-issuer.md).
 
 The rule: **the current secret seals, every configured secret opens.** So a
 rotation is done in two deployments, not one.
@@ -63,7 +67,9 @@ that does not yet contain the new key will reject every token until it refetches
 
 ## Warning with SUBJECT_SALT
 
-Changing it gives every person a new
+Values shorter than 16 characters produce a start-up warning but are not
+rejected, because changing one is the more damaging automatic action. Changing
+it gives every person a new
 `sub` at every relying party, which orphans their accounts - the relying party
 sees a brand new user and the old records become unreachable. There is no
 migration path short of every relying party re-linking accounts by email.

@@ -49,7 +49,7 @@ services:
   # KMS, DynamoDB and S3. The init script creates the key, the table and the
   # bucket once the services are up, which is this stack's Terraform.
   localstack:
-    image: docker.io/localstack/localstack:4
+    image: docker.io/localstack/localstack:4@sha256:3ebc37595918b8accb852f8048fef2aff047d465167edd655528065b07bc364a
     container_name: sag-localstack
     network_mode: host
     environment:

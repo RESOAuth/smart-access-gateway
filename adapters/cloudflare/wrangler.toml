@@ -30,9 +30,9 @@ SIGNING_ALG = "ES256"
 binding = "HSM"
 service = "sag-hsm"
 
-# Single-use authorisation codes and OTP send limits. Optional, and the only
-# state SAG keeps. KV is deliberately not an option here: it has no
-# compare-and-set, so both controls would be races. This is the recommended
+# Single-use authorisation codes and client assertions, and OTP send limits.
+# Optional, and the only state SAG keeps. KV is deliberately not an option
+# here: it has no compare-and-set, so these controls would be races. This is the recommended
 # configuration for a Cloudflare deployment that sends email codes; see
 # docs/state-and-limits.md. Uncomment all three blocks to use it.
 # [vars] STATE_STORE_BACKEND = "cf-durable-object"

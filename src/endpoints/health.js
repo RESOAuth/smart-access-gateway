@@ -6,10 +6,11 @@
 // and what it can do.
 //
 // Two things are deliberately absent. Whether a state store is configured, and
-// therefore whether authorisation codes are single-use and OTP sends are
-// limited, is a map of which defences are on: useful to an operator, and more
-// useful to somebody deciding whether replaying a code is worth trying. And
-// the upstreams are reported as a count per provider rather than by name,
+// therefore whether authorisation codes and client assertions are single-use
+// and OTP sends are limited, is a map of which defences are on: useful to an
+// operator, and more useful to somebody deciding whether replaying a value is
+// worth trying. And the upstreams are reported as a count per provider,
+// rather than by name,
 // because the domain list is the deployment's customer list. Both are in the
 // start-up banner and the logs instead, where the audience is known - see
 // docs/operations.md.

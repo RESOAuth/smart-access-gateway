@@ -27,8 +27,8 @@ Start here.
   from an upstream, what is guessed from an address, and why guessing is off.
 - [branding.md](branding.md) - operator branding, whitelabelling, custom CSS,
   terms and privacy links.
-- [state-and-limits.md](state-and-limits.md) - single-use codes, OTP send
-  limits, and which backend to use per platform.
+- [state-and-limits.md](state-and-limits.md) - single-use codes and client
+  assertions, OTP send limits, and which backend to use per platform.
 
 ## Running it
 

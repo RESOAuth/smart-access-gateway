@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ensureKeyMaterial, parseEnvFile, formatEnvFile, SECRETS_FILE, SETTINGS_FILE } from '../tools/datadir.js';
 import { loadConfig, assertUsable } from '../src/config.js';
+import { newSession, sessionCookie } from '../src/session.js';
 
 const dir = () => mkdtempSync(join(tmpdir(), 'sag-data-'));
 
@@ -101,4 +102,38 @@ test('a ChromeOS Crostini hostname counts as development', async () => {
   const real = loadConfig({ SAG_ISSUER: 'http://id.example.com' });
   assert.equal(real.devMode, false);
   assert.ok(real.problems.some((p) => /must only travel over TLS/.test(p)));
+});
+
+test('a production issuer is never derived from the request host', () => {
+  const config = loadConfig(
+    {
+      SAG_DEV: 'false',
+      SAG_SECRET: 'x'.repeat(48),
+      SUBJECT_SALT: 'fixed-salt',
+      OTP_ENABLED: 'false',
+    },
+    { requestUrl: 'https://attacker-chosen-host.example/' },
+  );
+  assert.ok(config.problems.some((p) => /SAG_ISSUER is required/.test(p)));
+});
+
+test('production session cookies are host-prefixed and host-scoped', async () => {
+  const production = loadConfig({
+    SAG_ISSUER: 'https://id.example.test/identity',
+    SAG_SECRET: 'x'.repeat(48),
+    SUBJECT_SALT: 'fixed-subject-salt',
+    SESSION_COOKIE_NAME: 'custom_session',
+  });
+  assert.equal(production.session.cookieName, '__Host-custom_session');
+  const cookie = await sessionCookie(
+    production,
+    newSession(production, { email: 'jamie@example.test', acr: 'test', amr: [] }),
+  );
+  assert.match(cookie, /^__Host-custom_session=/);
+  assert.match(cookie, /; Path=\/;/);
+  assert.match(cookie, /; Secure/);
+  assert.ok(!cookie.includes('Domain='));
+
+  const development = loadConfig({ SAG_ISSUER: 'http://localhost:8787', SESSION_COOKIE_NAME: 'custom_session' });
+  assert.equal(development.session.cookieName, 'custom_session');
 });

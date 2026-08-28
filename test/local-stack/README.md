@@ -108,7 +108,7 @@ pip3 install --user --break-system-packages -U podman-compose
 
 ## What `verify` checks
 
-```
+```sh
 ./stack.sh verify              # all of them
 ./stack.sh verify sag-lambda   # one, by name: sag-node, sag-workers,
                                # sag-lambda or rp-cimd

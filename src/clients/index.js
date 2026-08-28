@@ -10,12 +10,14 @@
 //      serves its own metadata. No registration step at all.
 //
 // The first three are configuration an operator controls. CIMD is not, so it
-// carries the most restrictions: an allow list of domains and a size cap.
-// Trusting a domain means trusting the redirect URIs its documents declare.
+// carries the most restrictions: public-network resolution, an optional
+// allow-list of domains, and a size cap. Trusting a domain means trusting the
+// redirect URIs its documents declare.
 
 import { OAuthError } from '../util/errors.js';
-import { BodyTooLargeError, fetchWithTimeout, readTextLimited } from '../util/http.js';
+import { BodyTooLargeError, fetchWithTimeout, readJsonLimited, readTextLimited } from '../util/http.js';
 import { nowSeconds } from '../util/bytes.js';
+import { isIpAddress, isLoopbackIp, isPublicIp } from '../util/ip.js';
 
 /** Normalise whatever a source produced into one client shape. */
 function normalise(raw) {
@@ -55,13 +57,15 @@ const isConfidential = (client) => client.tokenEndpointAuthMethod !== 'none';
  * is the loopback port, which RFC 8252 requires to be ignored because a native
  * application cannot know which port it will get.
  */
-export function redirectUriAllowed(client, candidate) {
+export function redirectUriAllowed(client, candidate, schemes = ['*']) {
   let want;
   try {
     want = new URL(candidate);
   } catch {
     return false;
   }
+  const scheme = want.protocol.slice(0, -1).toLowerCase();
+  if (!schemes.includes('*') && !schemes.includes(scheme)) return false;
   for (const registered of client.redirectUris) {
     let have;
     try {
@@ -85,9 +89,9 @@ export function redirectUriAllowed(client, candidate) {
   return false;
 }
 
-export function postLogoutRedirectAllowed(client, candidate) {
+export function postLogoutRedirectAllowed(client, candidate, schemes = ['*']) {
   if (!client?.postLogoutRedirectUris?.length) return false;
-  return redirectUriAllowed({ redirectUris: client.postLogoutRedirectUris }, candidate);
+  return redirectUriAllowed({ redirectUris: client.postLogoutRedirectUris }, candidate, schemes);
 }
 
 // ---------------------------------------------------------------------------
@@ -120,6 +124,57 @@ function cimdDomainAllowed(cimd, url) {
   });
 }
 
+const MAX_DNS_RESPONSE_BYTES = 64 * 1024;
+
+async function resolveAddresses(config, hostname, resolver) {
+  if (resolver && typeof resolver.resolve === 'function') {
+    const results = await Promise.allSettled(['A', 'AAAA'].map((type) => resolver.resolve(hostname, type)));
+    return results.flatMap((result) => (result.status === 'fulfilled' ? result.value || [] : [])).map(String);
+  }
+
+  const query = async (type, recordType) => {
+    const url = new URL(config.dns.resolverUrl);
+    url.searchParams.set('name', hostname);
+    url.searchParams.set('type', type);
+    const res = await fetchWithTimeout(
+      url.toString(),
+      { headers: { accept: 'application/dns-json' } },
+      config.dns.timeoutMs,
+    );
+    if (!res.ok) throw new Error('DNS resolver returned HTTP ' + res.status);
+    const body = await readJsonLimited(res, MAX_DNS_RESPONSE_BYTES);
+    if (!Array.isArray(body.Answer)) return [];
+    return body.Answer.filter((answer) => answer.type === recordType && typeof answer.data === 'string').map((answer) => answer.data);
+  };
+
+  const results = await Promise.allSettled([query('A', 1), query('AAAA', 28)]);
+  if (results.every((result) => result.status === 'rejected')) throw results[0].reason;
+  return results.flatMap((result) => (result.status === 'fulfilled' ? result.value : []));
+}
+
+/** Refuse CIMD fetches that could reach an address outside the public Internet. */
+async function assertPublicCimdTarget(config, url, resolver) {
+  const hostname = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (config.devMode && (hostname === 'localhost' || isLoopbackIp(hostname))) return;
+  if (hostname === 'localhost' || hostname.endsWith('.localhost')) {
+    throw new OAuthError('invalid_client', 'Client metadata must be served from a public network address');
+  }
+
+  let addresses;
+  if (isIpAddress(hostname)) addresses = [hostname];
+  else {
+    try {
+      addresses = await resolveAddresses(config, hostname, resolver);
+    } catch {
+      throw new OAuthError('invalid_client', 'Could not resolve the client metadata host');
+    }
+  }
+  if (addresses.length === 0) throw new OAuthError('invalid_client', 'Could not resolve the client metadata host');
+  if (addresses.some((address) => !isPublicIp(String(address).replace(/^\[|\]$/g, '')))) {
+    throw new OAuthError('invalid_client', 'Client metadata must be served from a public network address');
+  }
+}
+
 /** A CIMD key endpoint must be controlled by the same client origin. */
 function cimdJwksUri(value, documentUrl) {
   if (value === undefined) return undefined;
@@ -146,7 +201,7 @@ function cimdJwksUri(value, documentUrl) {
  * Redirects are refused for the same reason - following one would let the
  * origin in the client id hand off to another.
  */
-async function resolveCimd(config, clientId) {
+async function resolveCimd(config, clientId, deps = {}) {
   const cimd = config.clients.cimd;
   if (!cimd.enabled) return undefined;
   let url;
@@ -163,6 +218,7 @@ async function resolveCimd(config, clientId) {
   if (!cimdDomainAllowed(cimd, url)) {
     throw new OAuthError('invalid_client', 'This deployment does not accept client metadata from ' + url.hostname);
   }
+  await assertPublicCimdTarget(config, url, deps.resolver);
 
   const cached = cimdCache.get(clientId);
   if (cached && cached.expiresAt > nowSeconds()) return cached.client;
@@ -187,9 +243,8 @@ async function resolveCimd(config, clientId) {
   }
   const redirectUris = Array.isArray(doc.redirect_uris) ? doc.redirect_uris : [];
   for (const uri of redirectUris) {
-    let u;
     try {
-      u = new URL(uri);
+      new URL(uri);
     } catch {
       throw new OAuthError('invalid_client', 'Client metadata contains a malformed redirect URI');
     }
@@ -255,7 +310,7 @@ export async function resolveClient(config, clientId, deps = {}) {
   }
 
   if (clientId.startsWith('https://') || clientId.startsWith('http://')) {
-    return resolveCimd(config, clientId);
+    return resolveCimd(config, clientId, deps);
   }
   return undefined;
 }

@@ -111,7 +111,11 @@ export async function createContext(env, request, opts = {}) {
     absolute: (p) => config.issuer + p,
     /** Path for a form action, kept relative so a proxy prefix survives. */
     route: (p) => (basePath || '') + p,
-    resolveClient: (clientId) => resolveClient(config, clientId, { store }),
+    resolveClient: (clientId) =>
+      resolveClient(config, clientId, {
+        store,
+        resolver: env?.[config.dns.bindingName],
+      }),
     log: makeLogger(config),
   };
 }

@@ -6,8 +6,9 @@
 // contention at all: the object exists for as long as the record is valid and
 // then its alarm empties it.
 //
-// Two operations, because SAG needs exactly two: a single-use claim for
-// authorisation codes, and a counter for OTP send limits.
+// Three operations: a single-use claim for authorisation codes, client
+// assertions, and session revocations; a read for revocation checks; and a
+// counter for OTP send limits.
 
 export class StateGuard {
   constructor(state) {
@@ -27,10 +28,14 @@ export class StateGuard {
     if (!id) return json({ error: 'invalid_request' }, 400);
 
     // A minute at the low end so a clock skew cannot make a record vanish
-    // early, and two days at the high end because the longest thing SAG counts
-    // is a daily bucket.
-    const ttl = Math.min(Math.max(Number(body.ttlSeconds) || 120, 60), 2 * 86400);
-    const op = body.op === 'increment' ? 'increment' : 'claim';
+    // early. Session revocations can live for the configured absolute session
+    // lifetime, whose upper bound is one year.
+    const ttl = Math.min(Math.max(Number(body.ttlSeconds) || 120, 60), 366 * 86400);
+    const op = ['claim', 'has', 'increment'].includes(body.op) ? body.op : 'claim';
+
+    if (op === 'has') {
+      return json({ claimed: Boolean(await this.state.storage.get('claimed')) });
+    }
 
     // blockConcurrencyWhile makes the read and the write one indivisible step
     // even against a future runtime that interleaves I/O within an object.

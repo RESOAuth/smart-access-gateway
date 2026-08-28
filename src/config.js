@@ -74,6 +74,17 @@ function oneOf(env, key, allowed, fallback) {
   return v;
 }
 
+/** URI schemes, normalised without the trailing colon. */
+function schemes(env, key, fallback = ['*']) {
+  const values = list(env, key, fallback).map((value) => value.toLowerCase().replace(/:$/, ''));
+  for (const value of values) {
+    if (value !== '*' && !/^[a-z][a-z0-9+.-]*$/.test(value)) {
+      throw new ConfigError(key + ' contains an invalid URI scheme: "' + value + '"');
+    }
+  }
+  return [...new Set(values)];
+}
+
 /**
  * The first of several environment variable names that is actually set.
  *
@@ -478,6 +489,14 @@ function logoutConfirmValue(slug, value, problems) {
   return undefined;
 }
 
+function sessionScopeValue(slug, value, problems) {
+  if (value === undefined) return undefined;
+  const v = String(value).toLowerCase();
+  if (v === 'shared' || v === 'rp') return v;
+  problems.push('CLIENT_' + slug + '_SESSION_SCOPE must be shared or rp, got "' + value + '"; the client was ignored.');
+  return null;
+}
+
 function readStaticClients(env, problems) {
   const grouped = new Map();
   for (const key of Object.keys(env)) {
@@ -516,6 +535,8 @@ function readStaticClients(env, problems) {
     const defaultMethod = hasKeys ? 'private_key_jwt' : hasSecret ? 'client_secret_basic' : 'none';
     const authMethod = authMethodValue(slug, fields.AUTH_METHOD, defaultMethod, problems);
     if (authMethod === undefined) continue;
+    const sessionScope = sessionScopeValue(slug, fields.SESSION_SCOPE, problems);
+    if (sessionScope === null) continue;
     clients.push({
       source: 'static',
       slug,
@@ -530,7 +551,7 @@ function readStaticClients(env, problems) {
       scopes: (fields.SCOPES || '').split(/[,\s]+/).filter(Boolean),
       acrValues: (fields.ACR_VALUES || '').split(/[,\s]+/).filter(Boolean),
       idTokenSignedResponseAlg: fields.ID_TOKEN_SIGNED_RESPONSE_ALG,
-      sessionScope: fields.SESSION_SCOPE,
+      sessionScope,
       logoutConfirm: logoutConfirmValue(slug, fields.LOGOUT_CONFIRM, problems),
       logoUri: fields.LOGO_URI,
       tosUri: fields.TOS_URI,
@@ -575,6 +596,79 @@ function readPeerJwksUrls(env, devMode, warnings) {
   return urls;
 }
 
+/**
+ * Every https (or, in development, http) origin among the statically
+ * configured clients' own registered redirect URIs.
+ *
+ * A relying party already trusted that origin the moment its redirect URI was
+ * registered, so treating it as CORS-trusted too costs nothing new: it is how
+ * a public client's own page reads /token and /userinfo with fetch() without
+ * an operator naming the same origin a second time. A client that exists only
+ * in a store or as CIMD is not known at start-up, so its origin is not in
+ * this set - CORS_ALLOWED_ORIGINS is how one of those is added explicitly.
+ */
+function corsOriginsFromClients(staticClients, devMode) {
+  const origins = new Set();
+  for (const client of staticClients) {
+    for (const uri of client.redirectUris) {
+      let u;
+      try {
+        u = new URL(uri);
+      } catch {
+        continue;
+      }
+      if (u.protocol === 'https:' || (u.protocol === 'http:' && devMode)) origins.add(u.origin);
+    }
+  }
+  return origins;
+}
+
+/**
+ * Browser origins allowed to read the response from /token and /userinfo.
+ * Neither endpoint relies on a cookie - a PKCE-bound code and a bearer token
+ * authenticate the caller instead - so there is nothing here for a
+ * third-party origin to ride on; only whether it may read the JSON back needs
+ * a decision. That decision defaults to yes, for every origin a relying party
+ * has already registered a redirect URI on, so a public client works with no
+ * CORS configuration at all; CORS_ENABLED=false is the way to opt out
+ * entirely, and CORS_ALLOWED_ORIGINS names more origins on top - "*" for
+ * every one of them, the same as the discovery documents already allow.
+ *
+ * A malformed or disallowed CORS_ALLOWED_ORIGINS entry is dropped rather than
+ * refusing the whole deployment to start, the same tolerance readPeerJwksUrls
+ * gives one bad peer.
+ */
+function readCorsOrigins(env, devMode, staticClients, warnings) {
+  if (!bool(env, 'CORS_ENABLED', true)) return [];
+
+  const origins = corsOriginsFromClients(staticClients, devMode);
+  for (const raw of list(env, 'CORS_ALLOWED_ORIGINS')) {
+    if (raw === '*') {
+      origins.add('*');
+      continue;
+    }
+    let u;
+    try {
+      u = new URL(raw);
+    } catch {
+      warnings.push('Ignoring CORS_ALLOWED_ORIGINS entry "' + raw + '": not an absolute URL.');
+      continue;
+    }
+    if (u.protocol !== 'https:' && !(u.protocol === 'http:' && devMode)) {
+      warnings.push('Ignoring CORS_ALLOWED_ORIGINS entry "' + raw + '": must be an https origin outside development.');
+      continue;
+    }
+    if (u.origin !== raw) {
+      warnings.push(
+        'Ignoring CORS_ALLOWED_ORIGINS entry "' + raw + '": an origin has no path, query or fragment; use "' + u.origin + '".',
+      );
+      continue;
+    }
+    origins.add(u.origin);
+  }
+  return [...origins];
+}
+
 // ---------------------------------------------------------------------------
 // Top level
 // ---------------------------------------------------------------------------
@@ -599,10 +693,15 @@ export function loadConfig(env = {}, opts = {}) {
   if (insecureTransport && !devMode) {
     problems.push('SAG_ISSUER uses http. Cookies and tokens must only travel over TLS outside local development.');
   }
+  if (derived && !devMode) {
+    problems.push('SAG_ISSUER is required outside local development; it must not be derived from an untrusted request host.');
+  }
 
   // --- Master secret -------------------------------------------------------
-  const secretsList = [str(env, 'SAG_SECRET'), str(env, 'SAG_SECRET_PREVIOUS')].filter(Boolean);
-  if (secretsList.length === 0) {
+  const currentSecret = str(env, 'SAG_SECRET');
+  const previousSecret = str(env, 'SAG_SECRET_PREVIOUS');
+  const secretsList = [];
+  if (!currentSecret) {
     if (devMode) {
       // Stable across restarts so that a developer's session survives a reload.
       secretsList.push('sag-development-only-secret-do-not-use-in-production');
@@ -610,8 +709,22 @@ export function loadConfig(env = {}, opts = {}) {
     } else {
       problems.push('SAG_SECRET is required. Generate one with: openssl rand -base64 48');
     }
-  } else if (secretsList[0].length < 32 && !devMode) {
-    problems.push('SAG_SECRET must be at least 32 characters of high-entropy material.');
+  } else {
+    secretsList.push(currentSecret);
+    if (currentSecret.length < 32 && !devMode) {
+      problems.push('SAG_SECRET must be at least 32 characters of high-entropy material.');
+    }
+  }
+  if (previousSecret) {
+    // A previous key may open old values, but it must never be promoted to the
+    // key that seals new ones merely because the current variable is missing.
+    if (!currentSecret && !devMode) {
+      problems.push('SAG_SECRET_PREVIOUS cannot be used without SAG_SECRET.');
+    }
+    if (previousSecret.length < 32 && !devMode) {
+      problems.push('SAG_SECRET_PREVIOUS must be at least 32 characters of high-entropy material.');
+    }
+    if (currentSecret || devMode) secretsList.push(previousSecret);
   }
 
   const signing = readSigning(env, devMode, problems);
@@ -660,8 +773,9 @@ export function loadConfig(env = {}, opts = {}) {
   }
 
   // The one optional piece of state in SAG, shared by single-use
-  // authorisation codes and OTP send limits. Cloudflare KV is deliberately not
-  // an option: it has no compare-and-set, so both controls would be races.
+  // authorisation codes, client assertions, and OTP send limits. Cloudflare KV
+  // is deliberately not an option: it has no compare-and-set, so the replay
+  // controls and counters would be races.
   const stateStore = {
     backend: oneOf(
       env,
@@ -701,6 +815,7 @@ export function loadConfig(env = {}, opts = {}) {
   // Pulled out because the peer JWKS cache below defaults its grace period
   // off it, so it has to exist before the session section is built.
   const sessionMaxLifetimeSeconds = int(env, 'SESSION_MAX_LIFETIME', 7 * 86400, { min: 60, max: 365 * 86400 });
+  const configuredCookieName = str(env, 'SESSION_COOKIE_NAME', 'sag_session');
 
   const peerJwks = {
     urls: readPeerJwksUrls(env, devMode, warnings),
@@ -743,7 +858,13 @@ export function loadConfig(env = {}, opts = {}) {
 
     session: {
       scope: oneOf(env, 'SESSION_SCOPE', ['shared', 'rp'], 'shared'),
-      cookieName: str(env, 'SESSION_COOKIE_NAME', 'sag_session'),
+      // Production cookies are host-only and cannot be planted by another
+      // application on a parent domain. The prefix itself makes browsers
+      // enforce Secure, Path=/, and the absence of Domain.
+      cookieName:
+        devMode || configuredCookieName.startsWith('__Host-')
+          ? configuredCookieName
+          : '__Host-' + configuredCookieName,
       idleTtlSeconds: int(env, 'SESSION_TTL', 12 * 3600, { min: 60, max: 90 * 86400 }),
       maxLifetimeSeconds: sessionMaxLifetimeSeconds,
       // When sessions are per relying party, a prompt=none request can still be
@@ -783,12 +904,22 @@ export function loadConfig(env = {}, opts = {}) {
       sanitisePlusEmails: bool(env, 'SANITISE_PLUS_EMAILS', true),
     },
 
+    cors: {
+      // Off means /token and /userinfo carry no CORS headers at all: a
+      // browser-based relying party can still redeem a code or read its
+      // access token from its own server, it just cannot do it from
+      // JavaScript running on a page.
+      enabled: bool(env, 'CORS_ENABLED', true),
+      allowedOrigins: readCorsOrigins(env, devMode, staticClients, warnings),
+    },
+
     clients: {
       static: staticClients,
+      redirectUriSchemes: schemes(env, 'CLIENTS_REDIRECT_URI_SCHEMES'),
       cimd: {
         // A URL client id makes SAG fetch its metadata, so accepting every
-        // origin is an SSRF surface. It remains convenient on localhost, but a
-        // real deployment must opt in and name the origins it trusts.
+        // origin is an SSRF surface. Production must opt in, every resolved
+        // address must be public, and an operator can add a domain allow-list.
         enabled: bool(env, 'CLIENTS_CIMD_ENABLED', devMode),
         allowedDomains: list(env, 'CLIENTS_CIMD_ALLOWED_DOMAINS'),
         allowSubdomains: bool(env, 'CLIENTS_CIMD_ALLOW_SUBDOMAINS', true),
@@ -956,12 +1087,14 @@ export function loadConfig(env = {}, opts = {}) {
 
   if (stateStore.backend === 'memory' && !devMode) {
     internalWarnings.push(
-      'The state store backend is "memory", which only prevents code reuse within a single instance and counts OTP sends per instance. Use cf-durable-object or dynamodb if more than one instance can serve a request.',
+      'The state store backend is "memory", which only prevents code and client assertion reuse within a single instance, records session revocations within that instance, and counts OTP sends per instance. Use cf-durable-object or dynamodb if more than one instance can serve a request.',
     );
   }
   if (stateStore.backend === 'none' && !devMode) {
     internalWarnings.push(
       'No state store is configured, so authorisation codes are single-use by convention only' +
+        ', private_key_jwt assertions can be replayed within their 300 second maximum lifetime' +
+        ', copied sessions cannot be revoked by logout' +
         (otpEnabled ? ' and OTP send limits are not enforced' : '') +
         '. Set STATE_STORE_BACKEND, or put a platform rate limiting rule in front of this deployment. See docs/state-and-limits.md.',
     );
@@ -975,6 +1108,10 @@ export function loadConfig(env = {}, opts = {}) {
         'SUBJECT_SALT is not set. Generate one with "openssl rand -base64 32" and never change it, because rotating it orphans every account at every relying party.',
       );
     }
+  } else if (config.subject.salt.length < 16) {
+    internalWarnings.push(
+      'SUBJECT_SALT is shorter than 16 characters. Keep the existing value to preserve current subject identifiers, but use at least 16 random characters for a new deployment.',
+    );
   }
   // An endpoint override is how a local stack points at an emulator, so an
   // http one is expected in development and never anywhere else: SAG's signed

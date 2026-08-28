@@ -10,7 +10,16 @@ import { html, readForm, single, withCookies, redirect, escapeHtml } from '../ut
 import { decodeJwt } from '../crypto/jose.js';
 import { seal, unseal } from '../crypto/secrets.js';
 import { nowSeconds } from '../util/bytes.js';
-import { readSession, clearSessionCookie, allSessionCookieNames, clearCookieByName } from '../session.js';
+import {
+  readSession,
+  clearSessionCookie,
+  allSessionCookieNames,
+  clearCookieByName,
+  sessionClientFor,
+  cookieNameFor,
+  readSessionByName,
+  revokeSession,
+} from '../session.js';
 import { postLogoutRedirectAllowed } from '../clients/index.js';
 import { signedOutPage, confirmLogoutPage, legalFor } from '../ui/pages.js';
 import { displayIdentity } from '../profile.js';
@@ -34,17 +43,17 @@ export async function handleLogout(ctx) {
   if (requested) {
     // Only a registered post-logout URI, and only when we know which client is
     // asking. Otherwise this endpoint becomes an open redirector.
-    if (client && postLogoutRedirectAllowed(client, requested)) returnTo = requested;
+    if (client && postLogoutRedirectAllowed(client, requested, ctx.config.clients.redirectUriSchemes)) returnTo = requested;
     else {
       ctx.log.warn('rejected post_logout_redirect_uri', { client_id: requestedClientId });
     }
   }
   const state = single(params, 'state');
-  const scopedClientId = scopeClientFor(ctx.config, client);
-  const session = await readSession(ctx.config, ctx.request, scopedClientId);
+  const scope = client?.sessionScope || ctx.config.session.scope;
+  const scopedClientId = sessionClientFor(ctx.config, client);
+  const session = await readSession(ctx.config, ctx.request, scopedClientId, ctx.stateStore);
 
-  const affectsOthers =
-    ctx.config.session.scope === 'shared' && allSessionCookieNames(ctx.config, ctx.request).length > 0;
+  const affectsOthers = scope === 'shared' && Boolean(session);
 
   // Whether to show the interstitial at all. The instance sets the default and
   // a relying party can override it, because an application that owns its own
@@ -59,7 +68,9 @@ export async function handleLogout(ctx) {
     scoped: scopedClientId,
     returnTo,
     state,
-    global: ctx.config.session.scope === 'shared',
+    // A client-scoped request only clears the cookie that client uses. A
+    // generic logout under a shared instance remains an explicit global one.
+    global: requestedClientId === undefined && ctx.config.session.scope === 'shared',
     iat: nowSeconds(),
     exp: nowSeconds() + 600,
   });
@@ -71,7 +82,7 @@ export async function handleLogout(ctx) {
       state,
       clientName: client?.clientName,
       scopedClientId,
-      clearAll: true,
+      clearAll: false,
       legal: legalFor(ctx.config, client || {}),
     });
   }
@@ -105,7 +116,9 @@ async function performLogout(ctx, token) {
   try {
     payload = await unseal(ctx.config.secrets, PURPOSE, token);
   } catch {
-    return finish(ctx, { clearAll: true });
+    // An invented or expired confirmation token must not become a logout
+    // primitive. Render the neutral result without changing any cookie.
+    return html(signedOutPage(ctx, {}));
   }
   const client = payload.client_id ? await ctx.resolveClient(payload.client_id) : undefined;
   return performLogoutWith(ctx, {
@@ -132,10 +145,17 @@ async function performLogoutWith(ctx, opts) {
  */
 async function finish(ctx, { returnTo, state, clientName, scopedClientId, clearAll, legal }) {
   const cookies = [];
-  if (clearAll) {
-    for (const name of allSessionCookieNames(ctx.config, ctx.request)) {
-      cookies.push(clearCookieByName(ctx.config, name));
-    }
+  const names = clearAll
+    ? allSessionCookieNames(ctx.config, ctx.request)
+    : [await cookieNameFor(ctx.config, scopedClientId)];
+
+  // Claim every sid before telling the browser to discard its copy. When a
+  // store is configured, a failed claim must leave logout visibly failed
+  // rather than pretending copied cookies were revoked when they were not.
+  for (const name of names) {
+    const session = await readSessionByName(ctx.config, ctx.request, name, ctx.stateStore);
+    await revokeSession(ctx.stateStore, session);
+    cookies.push(clearCookieByName(ctx.config, name));
   }
   if (cookies.length === 0) cookies.push(await clearSessionCookie(ctx.config, scopedClientId));
 
@@ -167,11 +187,6 @@ function clientFromHint(hint) {
   } catch {
     return undefined;
   }
-}
-
-function scopeClientFor(config, client) {
-  const scope = client?.sessionScope || config.session.scope;
-  return scope === 'rp' ? client?.clientId : undefined;
 }
 
 export { escapeHtml };

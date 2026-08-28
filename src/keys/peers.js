@@ -34,7 +34,7 @@ async function fetchPeerJwks(url, { timeoutMs, maxBytes }, log) {
   try {
     body = JSON.parse(raw);
   } catch (cause) {
-    throw new Error('response is not valid JSON: ' + cause.message);
+    throw new Error('response is not valid JSON', { cause });
   }
   if (!Array.isArray(body?.keys)) throw new Error('response has no "keys" array');
 

@@ -10,7 +10,7 @@ When a person signs in through Microsoft or Google, their `id_token` usually
 carries a name and often a picture. Those are relayed to the relying party that
 asked for the `profile` scope, filtered through a fixed allow list:
 
-```
+```ascii
 name  given_name  family_name  middle_name  nickname
 preferred_username  picture  locale  zoneinfo
 ```

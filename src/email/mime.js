@@ -13,7 +13,7 @@ import { b64, utf8 } from '../util/bytes.js';
 /** RFC 2047 encoded-word, for a subject or display name with non-ASCII. */
 export function encodeHeaderValue(value) {
   const s = String(value);
-  // eslint-disable-next-line no-control-regex
+   
   if (/^[\x20-\x7e]*$/.test(s)) return s;
   return '=?UTF-8?B?' + b64(utf8(s)) + '?=';
 }

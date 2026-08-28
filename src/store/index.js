@@ -5,12 +5,15 @@
 // party we are guarding against is the one holding the token:
 //
 //   1. "Has this authorisation code been redeemed?" - single-use codes.
-//   2. "How many codes has this address asked for?" - OTP send limits.
+//   2. "Has this client assertion been presented?" - assertion replay defence.
+//   3. "How many codes has this address asked for?" - OTP send limits.
+//   4. "Has this session been signed out?" - copied-cookie revocation.
 //
 // Both reduce to two tiny primitives, so they share one store rather than
 // each growing their own:
 //
 //   claim(id, ttl)      true the first time, false every time after
+//   has(id)             whether a live claim exists
 //   increment(key, ttl) the running count, starting at 1
 //
 // Both have to be atomic, which is why Cloudflare KV is deliberately not an
@@ -66,6 +69,16 @@ export function createMemoryStore({ maxEntries = 10000 } = {}) {
         }
       }
       claims.set(id, now + Math.max(1, ttlSeconds));
+      return true;
+    },
+    async has(id) {
+      const now = nowSeconds();
+      const expiry = claims.get(id);
+      if (expiry === undefined) return false;
+      if (expiry < now) {
+        claims.delete(id);
+        return false;
+      }
       return true;
     },
     async increment(key, ttlSeconds) {
@@ -125,6 +138,10 @@ export function createDurableObjectStore(config, env) {
     async claim(id, ttlSeconds) {
       const body = await call('claim', id, ttlSeconds);
       return body.fresh === true;
+    },
+    async has(id) {
+      const body = await call('has', id, 0);
+      return body.claimed === true;
     },
     async increment(key, ttlSeconds) {
       const body = await call('increment', key, ttlSeconds);
@@ -199,6 +216,21 @@ export function createDynamoStore(config, env) {
       // unreachable.
       throw new Error('state store write failed (HTTP ' + res.status + '): ' + detail.slice(0, 200));
     },
+    async has(id) {
+      const now = nowSeconds();
+      const { res } = await send('GetItem', {
+        TableName: table,
+        Key: { jti: { S: id } },
+        ConsistentRead: true,
+        ProjectionExpression: 'expires_at',
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        throw new Error('state store read failed (HTTP ' + res.status + '): ' + detail.slice(0, 200));
+      }
+      const body = await res.json();
+      return Number(body?.Item?.expires_at?.N) >= now;
+    },
     async increment(key, ttlSeconds) {
       const { res } = await send('UpdateItem', {
         TableName: table,
@@ -225,8 +257,8 @@ export function createDynamoStore(config, env) {
 
 /**
  * @returns {Promise<object|undefined>} undefined when no store is configured,
- *   which leaves codes single-use by convention only and OTP send limits
- *   unenforced. See docs/state-and-limits.md.
+ *   which leaves codes and client assertions single-use by convention only,
+ *   and OTP send limits unenforced. See docs/state-and-limits.md.
  */
 export async function createStateStore(config, env) {
   switch (config.stateStore.backend) {

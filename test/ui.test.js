@@ -244,6 +244,7 @@ test('security headers are set on every page', async () => {
   assert.equal(res.headers.get('x-frame-options'), 'DENY', 'a sign-in page must not be framed');
   assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
   assert.equal(res.headers.get('referrer-policy'), 'no-referrer');
+  assert.equal(res.headers.get('strict-transport-security'), 'max-age=31536000');
   assert.equal(res.headers.get('cache-control'), 'no-store');
 });
 

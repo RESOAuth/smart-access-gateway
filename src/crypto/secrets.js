@@ -134,5 +134,9 @@ export async function verifyDigest(stored, presented) {
   if (scheme === 'sha256') actual = await sha256hex(presented);
   else if (scheme === 'plain') actual = String(presented);
   else throw new Error('unsupported secret digest scheme: ' + scheme);
-  return expected.length > 0 && timingSafeEqual(actual.toLowerCase(), expected.toLowerCase());
+  // Hex digests are notation and may be written in either case. A plain
+  // secret is data: folding its case makes two distinct credentials equal.
+  const left = scheme === 'sha256' ? actual.toLowerCase() : actual;
+  const right = scheme === 'sha256' ? expected.toLowerCase() : expected;
+  return expected.length > 0 && timingSafeEqual(left, right);
 }

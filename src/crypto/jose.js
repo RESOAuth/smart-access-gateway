@@ -3,7 +3,7 @@
 
 import { b64u, unb64u, b64uJson, unb64uText, utf8, timingSafeEqual, nowSeconds } from '../util/bytes.js';
 import { sha256b64u } from './secrets.js';
-import { fetchWithTimeout } from '../util/http.js';
+import { fetchWithTimeout, readJsonLimited } from '../util/http.js';
 
 export const ALGS = {
   ES256: { name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256', kty: 'EC', family: 'classical' },
@@ -138,13 +138,15 @@ export function validateClaims(payload, { issuer, audience, nonce, clockSkew = 6
     if (!aud.includes(audience)) throw new Error('token audience does not include ' + audience);
     if (aud.length > 1 && payload.azp && payload.azp !== audience) throw new Error('unexpected azp');
   }
-  if (typeof payload.exp !== 'number' || payload.exp + clockSkew < now) throw new Error('token expired');
-  if (typeof payload.nbf === 'number' && payload.nbf - clockSkew > now) throw new Error('token not yet valid');
-  if (typeof payload.iat === 'number' && payload.iat - clockSkew > now) throw new Error('token issued in the future');
+  if (!Number.isFinite(payload.exp) || payload.exp + clockSkew < now) throw new Error('token expired');
+  if (payload.nbf !== undefined && !Number.isFinite(payload.nbf)) throw new Error('invalid nbf');
+  if (Number.isFinite(payload.nbf) && payload.nbf - clockSkew > now) throw new Error('token not yet valid');
+  if (payload.iat !== undefined && !Number.isFinite(payload.iat)) throw new Error('invalid iat');
+  if (Number.isFinite(payload.iat) && payload.iat - clockSkew > now) throw new Error('token issued in the future');
   if (nonce !== undefined && !timingSafeEqual(String(payload.nonce ?? ''), nonce)) throw new Error('nonce mismatch');
   if (maxAge !== undefined) {
     const authTime = payload.auth_time;
-    if (typeof authTime !== 'number') throw new Error('auth_time required when max_age is requested');
+    if (!Number.isFinite(authTime)) throw new Error('auth_time required when max_age is requested');
     if (authTime + maxAge + clockSkew < now) throw new Error('authentication too old for max_age');
   }
   return payload;
@@ -212,29 +214,58 @@ export async function pemPrivateToJwk(pem, alg) {
 }
 
 const jwksCache = new Map();
+const MAX_JWKS_BYTES = 256 * 1024;
+const MAX_JWKS_CACHE_ENTRIES = 500;
+
+function rememberJwks(uri, entry) {
+  const now = nowSeconds();
+  for (const [key, cached] of jwksCache) {
+    if (cached.expiresAt <= now) jwksCache.delete(key);
+  }
+  jwksCache.delete(uri);
+  if (jwksCache.size >= MAX_JWKS_CACHE_ENTRIES) {
+    const oldest = jwksCache.keys().next().value;
+    if (oldest !== undefined) jwksCache.delete(oldest);
+  }
+  jwksCache.set(uri, entry);
+}
 
 /** Fetch and cache a remote JWKS. Used for client private_key_jwt keys. */
-export async function fetchJwks(uri, { ttlSeconds = 300, timeoutMs = 5000 } = {}) {
-  const cached = jwksCache.get(uri);
+export async function fetchJwks(
+  uri,
+  { ttlSeconds = 300, timeoutMs = 5000, maxBytes = MAX_JWKS_BYTES, allowHttp = false } = {},
+) {
+  let url;
+  try {
+    url = new URL(uri);
+  } catch {
+    throw new Error('JWKS URI is not an absolute URL');
+  }
+  if (url.username || url.password || (url.protocol !== 'https:' && !(allowHttp && url.protocol === 'http:'))) {
+    throw new Error('JWKS URI must use https');
+  }
+  const cacheKey = url.href;
+  const cached = jwksCache.get(cacheKey);
   const now = nowSeconds();
   if (cached && cached.expiresAt > now) return cached.jwks;
-  const res = await fetchWithTimeout(uri, { headers: { accept: 'application/json' } }, timeoutMs);
+  const res = await fetchWithTimeout(cacheKey, { headers: { accept: 'application/json' } }, timeoutMs);
   if (!res.ok) throw new Error('JWKS fetch failed with HTTP ' + res.status);
-  const jwks = await res.json();
+  const jwks = await readJsonLimited(res, maxBytes);
   if (!jwks || !Array.isArray(jwks.keys)) throw new Error('JWKS document has no keys array');
-  jwksCache.set(uri, { jwks, expiresAt: now + ttlSeconds });
+  rememberJwks(cacheKey, { jwks, expiresAt: now + ttlSeconds });
   return jwks;
 }
 
 /** Select a key from a JWKS by kid, falling back to a unique candidate. */
 export function selectJwk(jwks, header) {
-  const keys = (jwks.keys || []).filter((k) => !k.use || k.use === 'sig');
+  const keys = (jwks.keys || []).filter(
+    (k) => (!k.use || k.use === 'sig') && (!k.alg || k.alg === header.alg),
+  );
   if (header.kid) {
     const byKid = keys.find((k) => k.kid === header.kid);
     if (byKid) return byKid;
+    throw new Error('no matching key in JWKS');
   }
-  const byAlg = keys.filter((k) => !k.alg || k.alg === header.alg);
-  if (byAlg.length === 1) return byAlg[0];
   if (keys.length === 1) return keys[0];
   throw new Error('no matching key in JWKS');
 }

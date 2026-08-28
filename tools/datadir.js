@@ -98,7 +98,7 @@ export async function ensureKeyMaterial(dir, { alg, backend, now = () => new Dat
       mkdirSync(dir, { recursive: true, mode: 0o700 });
       probeWritable(dir);
     } catch (cause) {
-      throw new Error(explainUnwritable(dir, cause));
+      throw new Error(explainUnwritable(dir, cause), { cause });
     }
     writeFileSync(
       secretsPath,

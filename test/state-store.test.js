@@ -16,7 +16,9 @@ const EMAIL = 'person@example.org';
 
 test('the memory store claims an identifier exactly once', async () => {
   const store = createMemoryStore();
+  assert.equal(await store.has('abc'), false);
   assert.equal(await store.claim('abc', 60), true);
+  assert.equal(await store.has('abc'), true);
   assert.equal(await store.claim('abc', 60), false);
   assert.equal(await store.claim('abc', 60), false);
   assert.equal(await store.claim('def', 60), true, 'a different code is unaffected');
@@ -140,7 +142,10 @@ test('REQUIRE_STATE_STORE turns a missing backend into a startup error', () => {
 
 test('the memory backend warns when it cannot be trusted', () => {
   const dev = loadConfig({ SAG_ISSUER: 'http://localhost:8787', STATE_STORE_BACKEND: 'memory' });
-  assert.ok(!dev.internalWarnings.some((w) => /only prevents code reuse/.test(w)), 'fine for one local process');
+  assert.ok(
+    !dev.internalWarnings.some((w) => /only prevents code and client assertion reuse/.test(w)),
+    'fine for one local process',
+  );
 
   const prod = loadConfig({
     SAG_ISSUER: 'https://id.example.test',
@@ -148,7 +153,7 @@ test('the memory backend warns when it cannot be trusted', () => {
     STATE_STORE_BACKEND: 'memory',
   });
   assert.ok(
-    prod.internalWarnings.some((w) => /only prevents code reuse within a single instance/.test(w)),
+    prod.internalWarnings.some((w) => /only prevents code and client assertion reuse within a single instance/.test(w)),
     'a multi-instance deployment must be told',
   );
 });
@@ -330,11 +335,13 @@ test('the Durable Object store routes one object per key', async () => {
   assert.equal(store.backend, 'cf-durable-object');
   assert.equal(store.atomic, true);
   assert.equal(await store.claim('code-a', 60), true);
+  assert.equal(await store.has('code-a'), true);
+  assert.equal(await store.has('missing'), false);
   assert.equal(await store.claim('code-a', 60), false);
   assert.equal(await store.claim('code-b', 60), true, 'a separate object, so no contention');
   assert.equal(await store.increment('hits-a', 3600), 1);
   assert.equal(await store.increment('hits-a', 3600), 2);
-  assert.deepEqual(asked, ['code-a', 'code-a', 'code-b', 'hits-a', 'hits-a']);
+  assert.deepEqual(asked, ['code-a', 'code-a', 'missing', 'code-a', 'code-b', 'hits-a', 'hits-a']);
 });
 
 test('a missing Durable Object binding is a configuration error, not a silent pass', async () => {
@@ -420,6 +427,22 @@ test('DynamoDB counts with ADD, which is atomic, and sets the deadline once', as
   // if_not_exists keeps a daily bucket daily rather than rolling forward with
   // every request.
   assert.match(body.UpdateExpression, /if_not_exists\(#expires, :exp\)/);
+});
+
+test('DynamoDB reads a live claim consistently for session revocation', async (t) => {
+  const future = Math.floor(Date.now() / 1000) + 60;
+  const stub = dynamoStub((n) =>
+    new Response(n === 1 ? JSON.stringify({ Item: { expires_at: { N: String(future) } } }) : '{}', { status: 200 }),
+  );
+  t.after(stub.restore);
+
+  const store = await createStateStore(dynamoConfig(), awsEnv);
+  assert.equal(await store.has('session-revoked:abc'), true);
+  assert.equal(await store.has('session-revoked:missing'), false);
+  const body = JSON.parse(stub.calls[0].init.body);
+  assert.equal(stub.calls[0].init.headers['x-amz-target'], 'DynamoDB_20120810.GetItem');
+  assert.equal(body.ConsistentRead, true);
+  assert.equal(body.Key.jti.S, 'session-revoked:abc');
 });
 
 test('a DynamoDB failure refuses the exchange rather than waving it through', async (t) => {

@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createInstance, signInWithOtp, redeem, extractField, pkce, authorizeUrl } from './harness.js';
+import { createInstance, signInWithOtp, redeem, pkce, authorizeUrl } from './harness.js';
 import { createFileClientStore } from '../adapters/node/client-files.js';
 import { sha256hex } from '../src/crypto/secrets.js';
 

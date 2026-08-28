@@ -64,7 +64,10 @@ async function deliver(options, { from, to, raw }) {
     await session.expect(220);
     let capabilities = await session.command('EHLO ' + hostnameFor(from), 250);
 
-    if (!options.secure && options.requireTls && /STARTTLS/i.test(capabilities)) {
+    if (!options.secure && options.requireTls) {
+      if (!/^250[ -]STARTTLS(?:[ \t]|\r?$)/im.test(capabilities)) {
+        throw new Error('the SMTP relay does not advertise STARTTLS');
+      }
       await session.command('STARTTLS', 220);
       socket = tls.connect({
         socket,

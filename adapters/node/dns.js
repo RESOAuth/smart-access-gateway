@@ -9,7 +9,7 @@
 // Same arrangement as the file-backed client store: node: modules stay on this
 // side of the line and the core is handed a binding.
 
-import { Resolver } from 'node:dns/promises';
+import { Resolver, lookup } from 'node:dns/promises';
 
 /**
  * @param {object} [opts]
@@ -34,6 +34,8 @@ export function createDnsResolver({ timeoutMs = 1500 } = {}) {
         const records = await resolver.resolveTxt(name);
         return records.map((chunks) => chunks.join(''));
       }
+      if (type === 'A') return (await lookup(name, { family: 4, all: true })).map((record) => record.address);
+      if (type === 'AAAA') return (await lookup(name, { family: 6, all: true })).map((record) => record.address);
       throw new Error('unsupported record type ' + type);
     },
   };

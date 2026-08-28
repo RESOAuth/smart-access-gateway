@@ -13,9 +13,13 @@ import { cryptoReport } from '../../src/crypto/capabilities.js';
 import { createSignerSet } from '../../src/keys/registry.js';
 import { createFileClientStore } from './client-files.js';
 import { createDnsResolver } from './dns.js';
+import { SECURITY_HEADERS } from '../../src/util/http.js';
 
 const port = Number(process.env.PORT || 8787);
 const host = process.env.HOST || '127.0.0.1';
+const MAX_REQUEST_BODY_BYTES = 64 * 1024;
+
+class RequestBodyTooLargeError extends Error {}
 
 /**
  * The environment bag the core sees.
@@ -58,7 +62,7 @@ async function toFetchRequest(req, origin) {
       total += chunk.length;
       // The core caps bodies too, but stopping here avoids buffering a large
       // upload only to reject it afterwards.
-      if (total > 1024 * 1024) throw new Error('request body too large');
+      if (total > MAX_REQUEST_BODY_BYTES) throw new RequestBodyTooLargeError('request body too large');
       chunks.push(chunk);
     }
     body = Buffer.concat(chunks);
@@ -98,8 +102,15 @@ const server = createServer(async (req, res) => {
     }
   } catch (err) {
     console.error('[sag] request failed:', err);
-    if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
-    res.end('Internal error');
+    const tooLarge = err instanceof RequestBodyTooLargeError;
+    if (!res.headersSent) {
+      res.writeHead(tooLarge ? 413 : 500, {
+        'content-type': 'text/plain; charset=utf-8',
+        'cache-control': 'no-store',
+        ...SECURITY_HEADERS,
+      });
+    }
+    res.end(tooLarge ? 'Request body too large' : 'Internal error');
   }
 });
 
@@ -132,9 +143,9 @@ async function banner() {
         : 'disabled'),
     '  State store ' +
       (config.stateStore.backend === 'none'
-        ? 'none (codes are single-use by convention only, and OTP sends are not rate limited)'
+        ? 'none (codes and assertions are replayable, copied sessions survive logout, and OTP sends are not rate limited)'
         : config.stateStore.backend +
-          ' (single-use codes; ' +
+          ' (single-use codes and client assertions, session revocation; ' +
           config.otp.sendBurst +
           ' codes per ' +
           config.otp.sendWindowSeconds +

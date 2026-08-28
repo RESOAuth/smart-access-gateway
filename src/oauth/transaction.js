@@ -107,6 +107,7 @@ export function withOtpAttempt(tx) {
 
 /** Discard the OTP state, for "use a different email address". */
 export function withoutOtp(tx) {
+  // eslint-disable-next-line no-unused-vars
   const { otp, email, upstream, ...rest } = tx;
   return { ...rest, stage: STAGE.EMAIL };
 }
@@ -120,6 +121,7 @@ export function withoutOtp(tx) {
  * `withoutOtp` is the other case - going back to asking for an address at all.
  */
 export function withoutAttempt(tx) {
+  // eslint-disable-next-line no-unused-vars
   const { otp, upstream, ...rest } = tx;
   return rest;
 }

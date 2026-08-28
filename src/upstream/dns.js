@@ -23,7 +23,7 @@
 // already eligible for the address, and the upstream itself still validates the
 // tenant or hosted domain of whatever comes back.
 
-import { fetchWithTimeout } from '../util/http.js';
+import { fetchWithTimeout, readJsonLimited } from '../util/http.js';
 import { nowSeconds } from '../util/bytes.js';
 
 /**
@@ -76,6 +76,7 @@ const cache = new Map();
 // organisation being migrated onto a provider, mid-migration.
 const MISS_TTL_SECONDS = 300;
 const MAX_CACHED = 500;
+const MAX_DNS_RESPONSE_BYTES = 64 * 1024;
 
 export function clearMailProviderCache() {
   cache.clear();
@@ -123,7 +124,7 @@ async function resolve(ctx, domain, type) {
       ctx.config.dns.timeoutMs,
     );
     if (!res.ok) return [];
-    const body = await res.json();
+    const body = await readJsonLimited(res, MAX_DNS_RESPONSE_BYTES);
     // Both Cloudflare and Google answer in this shape. NXDOMAIN and friends
     // come back with a Status and no Answer, which is an empty list here.
     if (!Array.isArray(body.Answer)) return [];

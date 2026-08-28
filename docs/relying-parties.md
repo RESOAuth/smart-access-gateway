@@ -39,7 +39,9 @@ Redirect URIs are matched exactly. OAuth 2.1 removed prefix and wildcard
 matching because every variant of it has been used to smuggle a code to
 somebody else's page. The only concession is the loopback port, which RFC 8252
 requires to be ignored because a native application cannot know which port it
-will be given.
+will be given. Schemes are permissive by default so native private-use schemes
+work. Set `CLIENTS_REDIRECT_URI_SCHEMES=https,http,example-app` to restrict an
+instance; `*` restores the default.
 
 ## 2. A client store, for many
 
@@ -105,11 +107,14 @@ CLIENTS_CIMD_CACHE_TTL=300
 CLIENTS_CIMD_MAX_BYTES=32768
 ```
 
-SAG requires at least one well-formed redirect URI. The allow list is an
-explicit trust boundary: a permitted domain may declare its own redirect URIs,
-including loopback URIs for native applications. SAG refuses redirects while
-fetching the document and caps its size. These rules limit both where SAG will
-fetch metadata from and how much of it it will read.
+SAG requires at least one well-formed redirect URI. When set, the domain allow
+list is an additional trust boundary: a permitted domain may declare its own
+redirect URIs, including loopback URIs for native applications. An empty list
+accepts any public host. SAG resolves A and AAAA records before fetching and
+refuses a host if any answer is loopback, private, link-local, or otherwise
+non-public. Development permits localhost, but not arbitrary private
+addresses. SAG also refuses redirects while fetching the document and caps its
+size.
 
 Such a client is public by construction - the document is readable by anybody,
 so it can hold no secret - which is why PKCE is required of it regardless of
@@ -153,7 +158,7 @@ statically configured or self-describing.
 A relying party can ask for an authentication context, and SAG will refuse
 rather than quietly answering with something weaker:
 
-```
+```sh
 acr_values=urn:sag:acr:federated-mfa
 ```
 

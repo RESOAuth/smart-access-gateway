@@ -4,7 +4,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildMimeMessage, quotedPrintable, encodeHeaderValue, parseAddress } from '../src/email/mime.js';
 import { parseNotifyKey, createNotifySender } from '../src/email/notify.js';
-import { parseSmtpUrl } from '../src/email/smtp.js';
+import { parseSmtpUrl, createSmtpSender } from '../src/email/smtp.js';
+import { createServer } from 'node:net';
 import { createSesSender } from '../src/email/ses.js';
 import { createMailchannelsSender } from '../src/email/mailchannels.js';
 import { createEmailSender } from '../src/email/index.js';
@@ -196,6 +197,54 @@ test('an SMTP URL is parsed with safe defaults', () => {
   assert.equal(parseSmtpUrl('smtp://relay.example').port, 587, 'submission defaults to 587');
   assert.equal(parseSmtpUrl('smtp://relay.example?insecure=true').rejectUnauthorized, false);
   assert.throws(() => parseSmtpUrl('https://relay.example'), /smtp/);
+});
+
+test('SMTP refuses credentials and mail when STARTTLS is not advertised', async (t) => {
+  const commands = [];
+  const server = createServer((socket) => {
+    socket.write('220 relay.test ESMTP\r\n');
+    let buffer = '';
+    let data = false;
+    socket.on('data', (chunk) => {
+      buffer += chunk.toString('utf8');
+      while (buffer.includes('\r\n')) {
+        const end = buffer.indexOf('\r\n');
+        const line = buffer.slice(0, end);
+        buffer = buffer.slice(end + 2);
+        if (data) {
+          if (line === '.') {
+            data = false;
+            socket.write('250 queued\r\n');
+          }
+          continue;
+        }
+        commands.push(line);
+        if (line.startsWith('EHLO ')) socket.write('250-relay.test\r\n250 AUTH PLAIN\r\n');
+        else if (line.startsWith('AUTH PLAIN ')) socket.write('235 authenticated\r\n');
+        else if (line.startsWith('MAIL FROM:') || line.startsWith('RCPT TO:')) socket.write('250 ok\r\n');
+        else if (line === 'DATA') {
+          data = true;
+          socket.write('354 send it\r\n');
+        } else if (line === 'QUIT') socket.write('221 bye\r\n');
+      }
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const address = server.address();
+  const config = configWith({
+    EMAIL_PROVIDER: 'smtp',
+    EMAIL_FROM: 'Sign in <no-reply@example.test>',
+    SMTP_URL: `smtp://user:password@127.0.0.1:${address.port}`,
+  });
+  const sender = createSmtpSender(config);
+  await assert.rejects(
+    () => sender.send({ to: 'person@example.org', subject: 'Code', text: 'secret', html: '<p>secret</p>' }),
+    /does not advertise STARTTLS/,
+  );
+  assert.ok(!commands.some((line) => line.startsWith('AUTH ')), 'credentials must never cross the plain connection');
+  assert.ok(!commands.some((line) => line.startsWith('MAIL FROM:')), 'nor may a code be sent in clear');
 });
 
 test('the sender registry loads each provider lazily and rejects unknown ones', async () => {

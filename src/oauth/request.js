@@ -52,10 +52,10 @@ export async function parseAuthorizationRequest(params, config, deps) {
   if (!redirectUri) {
     throw new UnredirectableError('invalid_request', 'The redirect_uri parameter is missing.');
   }
-  if (!redirectUriAllowed(client, redirectUri)) {
+  if (!redirectUriAllowed(client, redirectUri, config.clients.redirectUriSchemes)) {
     throw new UnredirectableError(
       'invalid_request',
-      'That redirect_uri is not registered for this client. It must match one of the registered values exactly.',
+      'That redirect_uri is not permitted. It must use an allowed scheme and match one of the registered values exactly.',
     );
   }
 
@@ -127,13 +127,25 @@ export async function parseAuthorizationRequest(params, config, deps) {
   }
 
   const acrValues = (single(params, 'acr_values') || '').split(/\s+/).filter(Boolean);
-  const required = acrValues.length ? acrValues : config.acr.defaultRequired;
+  // This list is extended with the client's floor below, so it must never be
+  // the configuration array shared by every later request.
+  const required = [...(acrValues.length ? acrValues : config.acr.defaultRequired)];
   if (client.acrValues?.length) {
     // A client configured with a floor gets it whether it asked or not.
     for (const a of client.acrValues) if (!required.includes(a)) required.push(a);
   }
 
-  const idTokenAlg = single(params, 'id_token_signed_response_alg') ?? client.idTokenSignedResponseAlg;
+  const requestedIdTokenAlg = single(params, 'id_token_signed_response_alg');
+  if (
+    client.idTokenSignedResponseAlg &&
+    requestedIdTokenAlg &&
+    requestedIdTokenAlg !== client.idTokenSignedResponseAlg
+  ) {
+    fail('invalid_request', 'The requested ID token signing algorithm does not match this client registration.');
+  }
+  // A registered algorithm is a requirement, not a default an unauthenticated
+  // authorisation request may downgrade.
+  const idTokenAlg = client.idTokenSignedResponseAlg ?? requestedIdTokenAlg;
 
   const loginHintRaw = single(params, 'login_hint');
   const loginHint = loginHintRaw ? normaliseEmail(loginHintRaw) : undefined;

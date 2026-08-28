@@ -5,7 +5,7 @@ one OpenID Connect endpoint to talk to, and behind it uses whatever the person
 already has - a Microsoft or Google account, or a code emailed to them - so you
 never hold a password and never run a user database.
 
-```
+``` ascii
 your app  ──OIDC──▶  SAG  ──OIDC──▶  Microsoft / Google
                       └────email───▶  a one-time code
 ```
@@ -31,8 +31,8 @@ example relying party with `npm run example` and open
 ## What makes it different
 
 **No database.** Not "a database you can swap out" - none, unless you want
-single-use authorisation codes and rate limits, which are the two things that
-genuinely cannot be stateless. A session is an encrypted cookie, an in-flight
+single-use authorisation codes and client assertions, or send limits, which
+cannot be enforced statelessly. A session is an encrypted cookie, an in-flight
 request is an encrypted form field, an authorisation code is an encrypted
 string, all AES-256-GCM under keys derived from one master secret.
 
@@ -95,6 +95,13 @@ Everything is in [docs/](docs/README.md):
 | [post-quantum.md](docs/post-quantum.md) | Where the cryptography stands |
 | [adr/](docs/adr/README.md) · [rfcs/](docs/rfcs/README.md) | Why, and what is next |
 | [test/local-stack/](test/local-stack/README.md) | Every platform at once, locally |
+
+## Contributing and security
+
+Bug reports, enhancements, and pull requests are welcome. Read
+[CONTRIBUTING.md](CONTRIBUTING.md) before proposing a change. Report suspected
+vulnerabilities privately as described in [SECURITY.md](SECURITY.md), not in a
+public issue.
 
 ## Testing
 

@@ -35,3 +35,9 @@ decision here leaves open.
 | [0009](0009-peer-jwks-federation.md) | Multi-region and multi-cloud key distribution by federating public keys, not sharing private ones |
 | [0010](0010-signed-outbound-requests.md) | Sign every outbound request SAG makes on its own behalf, via `Authentication-Info` |
 | [0011](0011-subject-derived-from-the-verified-address.md) | The `sub` is derived from the verified address, never an upstream's, and a plus tag is not a separate person |
+| [0012](0012-store-backed-session-revocation.md) | A state-store marker revokes every copy of a signed-out session |
+| [0013](0013-host-prefixed-production-session-cookies.md) | Production session cookies use the `__Host-` prefix |
+| [0014](0014-sealed-values-remain-independent-of-the-issuer.md) | Sealed values remain independent of the issuer |
+| [0015](0015-cimd-fetches-require-public-network-addresses.md) | CIMD fetches require public network addresses |
+| [0016](0016-redirect-schemes-are-permissive-by-default.md) | Redirect schemes are permissive by default, with an optional allow-list |
+| [0017](0017-short-subject-salts-warn-without-forcing-rotation.md) | Short subject salts warn without forcing rotation |

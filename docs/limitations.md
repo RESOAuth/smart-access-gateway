@@ -13,6 +13,16 @@ client, inside a minute.
 **Closed by** setting `STATE_STORE_BACKEND`. See
 [state-and-limits.md](state-and-limits.md).
 
+## A client assertion can be replayed, by default
+
+A `private_key_jwt` assertion has a required issue time, a required unique
+identifier, and a maximum 300 second lifetime, but a stateless instance cannot
+remember that it has already seen the identifier. A captured assertion is
+therefore reusable within that short window when no state store is configured.
+
+**Closed by** setting `STATE_STORE_BACKEND`. See
+[state-and-limits.md](state-and-limits.md).
+
 ## OTP attempt counters can be rolled back
 
 The attempt and resend counters travel inside the sealed transaction, so
@@ -51,11 +61,15 @@ session, SAG answers `prompt=none` without showing anything. See
 [RFC 0002](rfcs/0002-refresh-tokens-backed-by-upstream.md) for the real
 feature this is holding out for.
 
-## Sessions cannot be revoked centrally
+## Session revocation needs a store
 
 A session is an encrypted cookie with an idle timeout and an absolute
-lifetime. There is no list of them, so "sign this person out everywhere, now"
-means rotating the master secret, which signs *everybody* out. See
+lifetime. Without a state store, logout only expires the current browser's
+copy, and another copy remains usable. With a store, logout writes a per-`sid`
+marker until the absolute expiry, so every copy of that session is refused.
+There is still no subject index, so "sign this person out on every device,
+now" means rotating the master secret, which signs *everybody* out. See
+[ADR 0012](adr/0012-store-backed-session-revocation.md) and
 [operations.md](operations.md).
 
 ## Upstream providers are tested against a stub, not the real thing
@@ -92,13 +106,12 @@ nothing else.
 by browsers scoping the directive to the initial submission. Neither is
 imminent.
 
-## A DNS provider hint tells somebody which domains are signing in
+## DNS-over-HTTPS tells a resolver which domains SAG is considering
 
 On Workers or Lambda there is no platform resolver, so guessing the upstream
-from a domain's mail records uses DNS-over-HTTPS - Cloudflare's by default. That
-service learns the domain of a sign-in, though only for the sign-ins where more
-than one provider could have taken the address and the chooser would otherwise
-have appeared.
+from a domain's mail records and checking a CIMD hostname's addresses use
+DNS-over-HTTPS - Cloudflare's by default. That service learns the domains being
+resolved. Node uses the host resolver instead.
 
 **Closed by** `DNS_RESOLVER_URL` pointing at a resolver you run,
 `SIGNIN_PROVIDER_HINT=off`, or deploying on Node, where the adapter hands the

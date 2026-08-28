@@ -38,7 +38,7 @@ export function createFileClientStore(dir) {
       try {
         return JSON.parse(text);
       } catch (cause) {
-        throw new Error(path + ' is not valid JSON: ' + cause.message);
+        throw new Error(path + ' is not valid JSON', { cause });
       }
     },
     /** For the start-up report only: how many records are sitting there. */

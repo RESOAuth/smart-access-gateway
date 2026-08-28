@@ -2,15 +2,18 @@
 
 SAG keeps no database. A session is an encrypted cookie, an in-flight request
 is an encrypted form field, an authorisation code is an encrypted string.
-There are exactly two questions that cannot be answered that way, because the
-answer changes over time and the party holding the token is the party being
-guarded against:
+There are four questions that cannot be answered that way, because the answer
+changes over time and the party holding the token is the party being guarded
+against:
 
 1. **Has this authorisation code already been redeemed?**
-2. **How many codes has this email address asked for?**
+2. **Has this client assertion already been presented?**
+3. **How many codes has this email address asked for?**
+4. **Has this session been signed out?**
 
-Both reduce to two primitives - claim an identifier once, and increment a
-counter - so they share one optional store rather than growing two. See
+They reduce to three primitives - claim an identifier once, read a live claim,
+and increment a counter - so they share one optional store rather than growing
+several. See
 [ADR 0001](adr/0001-stateless-with-optional-state-store.md) for why the store
 is optional at all, and [ADR 0002](adr/0002-email-otp-code-design.md) for why
 the OTP send limits take the shape they do.
@@ -19,7 +22,7 @@ the OTP send limits take the shape they do.
 
 | `STATE_STORE_BACKEND` | Use it when | Notes |
 | --- | --- | --- |
-| `none` (default) | Nothing is configured yet, or a WAF does the rate limiting and you accept the code trade-off | Both controls are off, and start-up says so |
+| `none` (default) | Nothing is configured yet, or a WAF does the rate limiting and you accept the replay and revocation trade-offs | All four controls are off, and start-up says so |
 | `memory` | One Node process, or one container | Genuinely atomic; per instance only. Capped by `STATE_STORE_MAX_ENTRIES`, and a full store refuses a claim rather than forgetting one |
 | `cf-durable-object` | **Recommended on Cloudflare** | One object per key, single-threaded, no contention |
 | `dynamodb` | **Recommended on AWS** | Conditional `PutItem` and `ADD`, with the table's own TTL sweeping records |
@@ -77,14 +80,27 @@ STATE_STORE_TABLE=sag-state
 STATE_STORE_REGION=eu-west-2
 ```
 
-The function's role needs `dynamodb:PutItem` and `dynamodb:UpdateItem` on that
-table and nothing else.
+The function's role needs `dynamodb:GetItem`, `dynamodb:PutItem`, and
+`dynamodb:UpdateItem` on that table and nothing else.
 
 ### Containers
 
 `STATE_STORE_BACKEND=memory` is set by the compose file and is correct for one
 container. Behind a load balancer with several, each counts its own, so use
 DynamoDB or accept that the limits are per instance.
+
+## Session revocation
+
+With a store, logout claims `session-revoked:<sid>` until the session's
+absolute expiry. Every later use of any copy of that sealed cookie reads the
+marker and is refused. Both the logout write and the session read fail closed
+if the store is unreachable, because pretending logout succeeded would leave a
+copied credential live.
+
+Without a store, logout can only expire cookies held by the current browser. A
+copied value remains usable until its idle or absolute deadline. The marker is
+per session, not per subject, so SAG still has no administrator operation to
+sign one person out on every device.
 
 ## Single-use authorisation codes
 
@@ -95,6 +111,18 @@ code is claimed exactly once and the second attempt gets `invalid_grant`.
 If the store is unreachable the token exchange is **refused**, not waved
 through. A person can start again, whereas failing open would disable the
 control exactly when somebody wants it disabled.
+
+## Single-use client assertions
+
+A `private_key_jwt` assertion must carry `iat`, `exp`, and `jti`, and can live
+for no more than 300 seconds. Without a store, a captured assertion remains
+usable inside that window. With a store, the client id and `jti` are claimed
+after signature and claim validation, and a second presentation gets
+`invalid_client`.
+
+This control fails closed if the store is full or unreachable. Assertion keys
+are hashed and namespaced before storage, so client-controlled identifiers do
+not become backend keys and cannot collide with authorisation code claims.
 
 ## OTP send limits
 
@@ -151,9 +179,9 @@ it is hopeless with or without a limit.
 ## How to tell whether it is on
 
 Not from `/healthz`: it used to say, and no longer does. Publishing whether
-codes are single-use and whether OTP sends have a ceiling is a map of which
-defences this deployment has, and the audience for an unauthenticated endpoint
-is not only the operator.
+codes and client assertions are single-use and whether OTP sends have a ceiling
+is a map of which defences this deployment has, and the audience for an
+unauthenticated endpoint is not only the operator.
 
 It is said to the operator instead. On Node it is in the start-up banner under
 "Warnings:"; on every platform it is logged once per isolate as

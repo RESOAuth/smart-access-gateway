@@ -12,7 +12,7 @@
 #
 # Built from the repository root.
 
-FROM public.ecr.aws/lambda/nodejs:24
+FROM public.ecr.aws/lambda/nodejs:24@sha256:f3c848893566f5efb8bf8c48798f0687a7196cf1808846cafbb4974706be3cdc
 
 # "type": "module" is what lets the runtime load an ES module handler.
 COPY package.json ${LAMBDA_TASK_ROOT}/

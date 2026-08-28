@@ -89,7 +89,7 @@ organisations run their mail through a security gateway - Mimecast, Proofpoint,
 Barracuda - whose MX records say nothing about identity, while the SPF record
 still names the provider that actually sends their mail:
 
-```
+```ps1
 v=spf1 include:eu._netblocks.mimecast.com include:spf.protection.outlook.com -all
 ```
 

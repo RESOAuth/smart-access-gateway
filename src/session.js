@@ -25,9 +25,18 @@ const PURPOSE = 'session';
  * enumerate which applications a person uses.
  */
 export async function cookieNameFor(config, clientId) {
-  if (config.session.scope !== 'rp' || !clientId) return config.session.cookieName;
+  // Callers have already applied the per-client scope override. A client id
+  // therefore always means an isolated cookie, even when the instance default
+  // is shared.
+  if (!clientId) return config.session.cookieName;
   const tag = (await sha256b64u('cookie ' + clientId)).slice(0, 12).replaceAll('-', '').replaceAll('_', '');
   return config.session.cookieName + '_' + tag;
+}
+
+/** Which client id scopes a session cookie, after client overrides. */
+export function sessionClientFor(config, client) {
+  const scope = client?.sessionScope || config.session.scope;
+  return scope === 'rp' ? client?.clientId : undefined;
 }
 
 /**
@@ -97,8 +106,13 @@ export async function sealSession(config, session) {
  * is none, or when what is there is expired, tampered with, or sealed under a
  * secret we no longer hold.
  */
-export async function readSession(config, request, clientId) {
+export async function readSession(config, request, clientId, stateStore) {
   const name = await cookieNameFor(config, clientId);
+  return readSessionByName(config, request, name, stateStore);
+}
+
+/** Read one explicitly named cookie, used when a global logout clears many. */
+export async function readSessionByName(config, request, name, stateStore) {
   const raw = parseCookies(request).get(name);
   if (!raw) return undefined;
   try {
@@ -106,12 +120,29 @@ export async function readSession(config, request, clientId) {
     const now = nowSeconds();
     if (typeof session.abs === 'number' && session.abs < now) return undefined;
     if (!session.email || !session.sid) return undefined;
+    if (stateStore && (await stateStore.has(revocationKey(session.sid)))) return undefined;
     return session;
   } catch (err) {
     if (err instanceof SealError) return undefined;
     throw err;
   }
 }
+
+/**
+ * Revoke every copy of a session until its natural absolute expiry.
+ *
+ * `claim` is deliberately used rather than an overwrite: repeated logout is
+ * harmless, and every backend already gives claims an atomic TTL.
+ */
+export async function revokeSession(stateStore, session) {
+  if (!stateStore || !session?.sid || !Number.isFinite(session.abs)) return;
+  const ttl = session.abs - nowSeconds();
+  if (ttl > 0) await stateStore.claim(revocationKey(session.sid), ttl);
+}
+
+const revocationKey = (sid) => 'session-revoked:' + sid;
+
+const cookiePath = (config) => (config.devMode ? config.basePath || '/' : '/');
 
 /**
  * A Set-Cookie value for a session.
@@ -128,7 +159,7 @@ export async function sessionCookie(config, session, clientId) {
     maxAge: Math.max(0, session.exp - nowSeconds()),
     sameSite: 'Lax',
     secure: !config.insecureTransport,
-    path: config.basePath || '/',
+    path: cookiePath(config),
   });
 }
 
@@ -138,7 +169,7 @@ export async function clearSessionCookie(config, clientId) {
     maxAge: 0,
     sameSite: 'Lax',
     secure: !config.insecureTransport,
-    path: config.basePath || '/',
+    path: cookiePath(config),
   });
 }
 
@@ -159,7 +190,7 @@ export function clearCookieByName(config, name) {
     maxAge: 0,
     sameSite: 'Lax',
     secure: !config.insecureTransport,
-    path: config.basePath || '/',
+    path: cookiePath(config),
   });
 }
 

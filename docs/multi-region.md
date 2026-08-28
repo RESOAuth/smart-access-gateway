@@ -145,7 +145,7 @@ instance's own keys plus whatever it currently trusts from each of them. See
 [ADR 0009](adr/0009-peer-jwks-federation.md) for why this was chosen over
 sharing one private key across instances.
 
-```
+```sh
 PEER_JWKS_URLS=https://aws-eu-west-2.auth.resoauth.cloud/.well-known/jwks.json,https://cf-workers.auth.resoauth.cloud/.well-known/jwks.json
 ```
 

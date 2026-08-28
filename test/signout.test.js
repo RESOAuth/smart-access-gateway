@@ -7,7 +7,15 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createInstance, signInWithOtp, extractField, DEV_CLIENT, DEV_REDIRECT } from './harness.js';
+import {
+  createInstance,
+  signInWithOtp,
+  extractField,
+  DEV_CLIENT,
+  DEV_REDIRECT,
+  pkce,
+  authorizeUrl,
+} from './harness.js';
 import { loadConfig } from '../src/config.js';
 
 const EMAIL = 'person@example.org';
@@ -26,11 +34,66 @@ test('a shared session is confirmed before it is ended', async () => {
   assert.match(await done.text(), /You are signed out/);
 });
 
+test('a state store makes logout revoke a copied session until it expires', async () => {
+  const sag = createInstance({ STATE_STORE_BACKEND: 'memory' });
+  await signInWithOtp(sag, { email: EMAIL });
+  const copied = new Map(sag.cookies);
+
+  const confirm = await sag.raw('/logout');
+  const html = await confirm.text();
+  await sag.postForm('/logout', { lt: extractField(html, 'lt') });
+
+  // Put back the exact sealed value another browser or an attacker copied
+  // before logout. Clearing only the current browser would accept it.
+  sag.cookies.clear();
+  for (const [name, value] of copied) sag.cookies.set(name, value);
+  const { challenge } = await pkce();
+  const request = authorizeUrl({ challenge, prompt: 'none' });
+  const res = await sag.raw(request.path);
+  const location = new URL(res.headers.get('location'));
+  assert.equal(location.searchParams.get('error'), 'login_required');
+  assert.equal(location.searchParams.get('code'), null);
+});
+
 test('a per-RP session ends without an interstitial, because only one is affected', async () => {
   const sag = createInstance({ SESSION_SCOPE: 'rp' });
   await signInWithOtp(sag, { email: EMAIL });
   const res = await sag.raw('/logout?client_id=' + DEV_CLIENT);
   assert.match(await res.text(), /You are signed out/, 'nothing to warn anybody about');
+});
+
+test('logging out an RP-scoped override leaves the shared session intact', async () => {
+  const sag = createInstance({
+    SESSION_SCOPE: 'shared',
+    CLIENT_ONE_ID: 'client-one',
+    CLIENT_ONE_REDIRECT_URIS: 'https://one.test/cb',
+    CLIENT_ONE_SESSION_SCOPE: 'rp',
+    CLIENT_TWO_ID: 'client-two',
+    CLIENT_TWO_REDIRECT_URIS: 'https://two.test/cb',
+  });
+  await signInWithOtp(sag, {
+    email: EMAIL,
+    authorize: { clientId: 'client-one', redirectUri: 'https://one.test/cb' },
+  });
+  await signInWithOtp(sag, {
+    email: EMAIL,
+    authorize: { clientId: 'client-two', redirectUri: 'https://two.test/cb' },
+  });
+  assert.equal(sag.cookies.size, 2, 'one isolated cookie and one shared cookie');
+
+  await sag.raw('/logout?client_id=client-one');
+  assert.equal(sag.cookies.size, 1);
+  assert.ok(sag.cookies.has('sag_session'), 'the unrelated shared session must survive');
+});
+
+test('an invalid logout confirmation token does not clear a session', async () => {
+  const sag = createInstance();
+  await signInWithOtp(sag, { email: EMAIL });
+  const before = new Map(sag.cookies);
+
+  const res = await sag.raw('/logout?lt=not-a-token');
+  assert.match(await res.text(), /You are signed out/);
+  assert.deepEqual(sag.cookies, before, 'untrusted input must not become a logout primitive');
 });
 
 test('an instance can always ask, or never ask', async () => {

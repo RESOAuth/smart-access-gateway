@@ -1,8 +1,8 @@
 // Authenticating a relying party at the token endpoint.
 
 import { invalidClient } from '../util/errors.js';
-import { unb64, utf8, fromUtf8, nowSeconds } from '../util/bytes.js';
-import { verifyDigest } from '../crypto/secrets.js';
+import { unb64, fromUtf8, nowSeconds } from '../util/bytes.js';
+import { sha256b64u, verifyDigest } from '../crypto/secrets.js';
 import { decodeJwt, verifyCompact, fetchJwks, selectJwk, validateClaims } from '../crypto/jose.js';
 import { single } from '../util/http.js';
 
@@ -76,20 +76,20 @@ function safeDecode(value) {
  * @param {object} client
  * @param {object} credentials  From readCredentials
  */
-export async function authenticateClient(config, client, credentials) {
+export async function authenticateClient(config, client, credentials, replayStore) {
   const registered = client.tokenEndpointAuthMethod || 'none';
 
   if (registered === 'none') {
     // A public client proves nothing here; PKCE is what protects its code.
-    if (credentials.secret || credentials.assertion) {
+    if (credentials.method !== 'none') {
       throw invalidClient('This client is registered as public and must not present a credential.');
     }
     return { method: 'none' };
   }
 
   if (registered === 'client_secret_basic' || registered === 'client_secret_post') {
-    if (credentials.method !== 'client_secret_basic' && credentials.method !== 'client_secret_post') {
-      throw invalidClient('This client must authenticate with its client secret.');
+    if (credentials.method !== registered) {
+      throw invalidClient('This client must authenticate with ' + registered + '.');
     }
     const stored = client.clientSecretDigest || client.clientSecret;
     if (!stored) throw invalidClient('This client has no secret configured.');
@@ -107,7 +107,7 @@ export async function authenticateClient(config, client, credentials) {
     if (credentials.method !== 'private_key_jwt') {
       throw invalidClient('This client must authenticate with a private_key_jwt assertion.');
     }
-    await verifyPrivateKeyJwt(config, client, credentials.assertion);
+    await verifyPrivateKeyJwt(config, client, credentials.assertion, replayStore);
     return { method: 'private_key_jwt' };
   }
 
@@ -119,10 +119,10 @@ export async function authenticateClient(config, client, credentials) {
  *
  * The audience must be this issuer, so an assertion minted for another
  * identity provider cannot be forwarded here, and `jti` plus a short lifetime
- * bound how long a captured assertion stays useful. Without state we cannot
- * reject a repeated `jti`; a 300 second ceiling keeps the window small.
+ * bound how long a captured assertion stays useful. A configured state store
+ * also makes the assertion single-use.
  */
-export async function verifyPrivateKeyJwt(config, client, assertion) {
+export async function verifyPrivateKeyJwt(config, client, assertion, replayStore) {
   let header;
   try {
     ({ header } = decodeJwt(assertion));
@@ -136,7 +136,7 @@ export async function verifyPrivateKeyJwt(config, client, assertion) {
   let jwks = client.jwks;
   if (!jwks && client.jwksUri) {
     try {
-      jwks = await fetchJwks(client.jwksUri);
+      jwks = await fetchJwks(client.jwksUri, { allowHttp: config.devMode });
     } catch (err) {
       throw invalidClient('Could not read the client JWKS: ' + err.message);
     }
@@ -167,9 +167,23 @@ export async function verifyPrivateKeyJwt(config, client, assertion) {
     throw invalidClient('The client assertion is not acceptable: ' + err.message);
   }
   if (payload.sub !== client.clientId) throw invalidClient('The client assertion subject must be the client id.');
-  if (!payload.jti) throw invalidClient('The client assertion must carry a jti.');
-  const lifetime = payload.exp - (payload.iat ?? payload.exp);
-  if (lifetime > 300) throw invalidClient('The client assertion lifetime must not exceed 300 seconds.');
+  if (typeof payload.jti !== 'string' || !payload.jti) {
+    throw invalidClient('The client assertion must carry a string jti.');
+  }
+  if (!Number.isFinite(payload.iat)) throw invalidClient('The client assertion must carry an iat.');
+  const lifetime = payload.exp - payload.iat;
+  if (lifetime < 0 || lifetime > 300) {
+    throw invalidClient('The client assertion lifetime must be between zero and 300 seconds.');
+  }
+
+  if (replayStore) {
+    // Hash the client-controlled values before they become a store key. The
+    // prefix also keeps assertion identifiers separate from code identifiers.
+    const tag = await sha256b64u(client.clientId + '\0' + payload.jti);
+    const ttl = payload.exp - nowSeconds() + config.tokens.clockSkewSeconds;
+    const fresh = await replayStore.claim('client-assertion:' + tag, ttl);
+    if (!fresh) throw invalidClient('The client assertion has already been used.');
+  }
   return payload;
 }
 
