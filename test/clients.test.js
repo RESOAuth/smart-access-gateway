@@ -16,6 +16,7 @@ import {
   selectJwk,
   fetchJwks,
   clearJwksCache,
+  importPrivateJwk,
 } from '../src/crypto/jose.js';
 import { sha256hex } from '../src/crypto/secrets.js';
 import { nowSeconds, randomToken } from '../src/util/bytes.js';
@@ -406,6 +407,24 @@ test('a JWK algorithm declaration constrains key selection even when kid matches
   assert.throws(
     () => selectJwk(jwks, { kid: 'shared-rsa-key', alg: 'PS256' }),
     /no matching key/,
+  );
+});
+
+test('RSA keys smaller than 2048 bits are refused', async () => {
+  const pair = await crypto.subtle.generateKey(
+    {
+      name: 'RSASSA-PKCS1-v1_5',
+      hash: 'SHA-256',
+      modulusLength: 1024,
+      publicExponent: new Uint8Array([1, 0, 1]),
+    },
+    true,
+    ['sign', 'verify'],
+  );
+  const jwk = { ...(await crypto.subtle.exportKey('jwk', pair.privateKey)), alg: 'RS256' };
+  await assert.rejects(
+    () => importPrivateJwk(jwk, 'RS256'),
+    /RSA modulus of at least 2048 bits/,
   );
 });
 

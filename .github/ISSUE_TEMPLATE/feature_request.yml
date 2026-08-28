@@ -1,0 +1,23 @@
+name: Enhancement proposal
+description: Propose a change to SAG
+title: "Proposal: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem should SAG solve?
+      description: Describe the use case and why the current behaviour is insufficient.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Explain the external behaviour, including operational or compatibility costs.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

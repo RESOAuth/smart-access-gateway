@@ -2,6 +2,7 @@
   "name": "sag",
   "version": "0.1.0",
   "description": "Smart Access Gateway - a stateless, deployable identity proxy (RESOAuth Ltd)",
+  "homepage": "https://sag.resoauth.dev",
   "license": "AGPL-3.0",
   "type": "module",
   "engines": {
@@ -13,9 +14,11 @@
     "./lambda": "./adapters/lambda/handler.js"
   },
   "scripts": {
+    "check": "find src adapters tools examples test -name '*.js' -print0 | xargs -0 -n1 node --check",
     "dev": "node adapters/node/server.js",
     "start": "node adapters/node/server.js",
     "start:persistent": "node tools/bootstrap.js",
+    "lint": "eslint . --max-warnings 0",
     "test": "node --test test/*.test.js",
     "keygen": "node tools/keygen.js",
     "hash-secret": "node tools/hash-secret.js",

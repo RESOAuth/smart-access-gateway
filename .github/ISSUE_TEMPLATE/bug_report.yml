@@ -1,0 +1,45 @@
+name: Bug report
+description: Report reproducible incorrect behaviour
+title: "Bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not report vulnerabilities here. Follow SECURITY.md instead.
+  - type: textarea
+    id: behaviour
+    attributes:
+      label: What happened?
+      description: Include what you expected and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How can it be reproduced?
+      description: Give the smallest configuration and sequence of requests which demonstrate the problem. Remove secrets and personal data.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: SAG version
+      description: Use the version from /healthz, a release tag, or a commit hash.
+    validations:
+      required: true
+  - type: dropdown
+    id: adapter
+    attributes:
+      label: Adapter
+      options:
+        - Node or container
+        - AWS Lambda
+        - Cloudflare Worker
+        - More than one
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Relevant logs or context
+      description: Remove credentials, tokens, email addresses, and other personal data.

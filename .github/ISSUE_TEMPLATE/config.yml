@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a vulnerability privately
+    url: https://github.com/RESOAuth/smart-access-gateway/security/advisories/new
+    about: Follow the security policy instead of opening a public issue.
