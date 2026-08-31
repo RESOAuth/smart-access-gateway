@@ -9,6 +9,11 @@
 // its own, and caches what it found for long enough that a peer going away
 // does not make the tokens it already issued suddenly unverifiable.
 //
+// Failures are remembered too, briefly. Caching only successes would mean a
+// peer that has never answered is re-fetched on every single request, so an
+// unreachable peer would cost the whole fetch timeout on the request path of
+// /jwks.json - the one endpoint every relying party calls to verify a token.
+//
 // Listing a URL in PEER_JWKS_URLS is not "share a public key for
 // convenience": whatever keys it returns are trusted for this issuer as
 // fully as this instance's own signer set, because that is exactly what
@@ -170,8 +175,14 @@ function createCache(config, env) {
  */
 export function createPeerJwks(config, env) {
   if (config.peerJwks.urls.length === 0) return undefined;
-  const { urls, cacheTtlSeconds, staleTtlSeconds, timeoutMs, maxDocumentBytes, cacheBackend } = config.peerJwks;
+  const { urls, cacheTtlSeconds, staleTtlSeconds, retryAfterSeconds, timeoutMs, maxDocumentBytes, cacheBackend } =
+    config.peerJwks;
   const cache = createCache(config, env);
+  // When a peer may next be tried again, per URL. In this process only, and
+  // never in the shared cache: a peer being unreachable from here says nothing
+  // about whether it is reachable from another instance. Bounded by the
+  // configured URL list, so there is nothing to evict.
+  const retryAfter = new Map();
 
   return {
     backend: cacheBackend,
@@ -219,8 +230,16 @@ export function createPeerJwks(config, env) {
     const now = nowSeconds();
     if (cached && now - cached.fetchedAt < cacheTtlSeconds) return cached.keys;
 
+    // A peer that has just failed is not tried again for a moment. Only
+    // successes are cached, so without this a peer that has never answered -
+    // a wrong URL, a region still coming up, an outage - costs a full
+    // PEER_JWKS_TIMEOUT_MS on the request path of every /jwks.json, which is
+    // the request every relying party makes to verify a token.
+    if (now < (retryAfter.get(url) ?? 0)) return graceKeys(cached, now);
+
     try {
       const keys = await fetchPeerJwks(url, { timeoutMs, maxBytes: maxDocumentBytes }, log);
+      retryAfter.delete(url);
       try {
         // Awaited rather than fired-and-forgotten: on Workers, a promise that
         // outlives the response is not guaranteed to finish without
@@ -231,6 +250,7 @@ export function createPeerJwks(config, env) {
       }
       return keys;
     } catch (err) {
+      if (retryAfterSeconds > 0) retryAfter.set(url, now + retryAfterSeconds);
       if (cached && now - cached.fetchedAt < staleTtlSeconds) {
         log?.warn('peer unreachable, serving its last known keys', { url, ageSeconds: now - cached.fetchedAt, error: err.message });
         return cached.keys;
@@ -238,6 +258,11 @@ export function createPeerJwks(config, env) {
       log?.warn('peer unreachable and no usable cached keys remain', { url, error: err.message });
       return [];
     }
+  }
+
+  /** What a peer still contributes while no fetch is being attempted for it. */
+  function graceKeys(cached, now) {
+    return cached && now - cached.fetchedAt < staleTtlSeconds ? cached.keys : [];
   }
 }
 

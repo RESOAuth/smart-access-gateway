@@ -196,6 +196,19 @@ round number comfortably past the minimum, not a precisely computed bound -
 tighten it with `PEER_JWKS_STALE_TTL` if a deployment wants to reason about it
 more exactly.
 
+Failures are held for a short interval of their own, `PEER_JWKS_RETRY_AFTER`
+(default thirty seconds). Only a successful fetch is cached, so without it a
+peer that has never answered - a URL with a typo in it, a region still coming
+up, an outage that started before this instance did - would be attempted again
+on every single request, and each attempt would hold the connection open for
+`PEER_JWKS_TIMEOUT_MS` before giving up. `/jwks.json` is the endpoint every
+relying party calls to verify a token, so that is the wrong place to pay a
+four second timeout per request: one region being unreachable would slow token
+verification everywhere rather than only there. The backoff does not shorten
+the grace period - a peer inside it still contributes its last known keys -
+and a success clears it immediately, so a peer that comes back is picked up on
+the next attempt rather than waiting the interval out.
+
 ### Where the cache lives
 
 `PEER_JWKS_CACHE_BACKEND` picks where a fetched entry is kept:

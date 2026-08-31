@@ -855,6 +855,12 @@ export function loadConfig(env = {}, opts = {}) {
     // twice the longest a session can live, which is the longest duration
     // this deployment already has a concept of - see docs/multi-region.md.
     staleTtlSeconds: int(env, 'PEER_JWKS_STALE_TTL', 2 * sessionMaxLifetimeSeconds, { min: 0, max: 40 * 365 * 86400 }),
+    // How long to leave a peer alone after a failed fetch. Only successes are
+    // cached, so without this every /jwks.json request pays the whole timeout
+    // for a peer that has never answered. Short, because it delays noticing
+    // that a peer has come back, and that is the only thing it costs. Zero
+    // retries on every request.
+    retryAfterSeconds: int(env, 'PEER_JWKS_RETRY_AFTER', 30, { min: 0, max: 3600 }),
     timeoutMs: int(env, 'PEER_JWKS_TIMEOUT_MS', 4000, { min: 100, max: 20000 }),
     // Several peers each publishing a couple of post-quantum keys adds up:
     // an ML-DSA-44 public key alone is 1,312 bytes (docs/post-quantum.md).

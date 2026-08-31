@@ -133,6 +133,56 @@ test('a peer unreachable for longer than the grace period drops out rather than 
   assert.deepEqual(await peer.keys(), [], 'no grace period left, so this peer contributes nothing rather than failing the request');
 });
 
+test('a peer that has never answered is not refetched on every request', async (t) => {
+  // The case PEER_JWKS_RETRY_AFTER exists for: nothing is cached, so without
+  // a backoff every /jwks.json would pay the whole fetch timeout again.
+  const stub = fetchStub({ [PEER_A]: new Error('connect refused') });
+  t.after(stub.restore);
+  const peer = createPeerJwks(configWith({ PEER_JWKS_CACHE_TTL: '0', PEER_JWKS_RETRY_AFTER: '30' }), {});
+
+  assert.deepEqual(await peer.keys(), []);
+  assert.deepEqual(await peer.keys(), []);
+  assert.deepEqual(await peer.keys(), []);
+  assert.equal(stub.calls.length, 1, 'only the first request may attempt a fetch');
+});
+
+test('a peer within its backoff still contributes its graced keys', async (t) => {
+  const config = configWith({ PEER_JWKS_CACHE_TTL: '0', PEER_JWKS_RETRY_AFTER: '30' });
+  const peer = createPeerJwks(config, {});
+
+  const up = fetchStub({ [PEER_A]: { keys: [key('peer-1')] } });
+  assert.deepEqual(await peer.keys(), [key('peer-1')]);
+  up.restore();
+
+  const down = fetchStub({ [PEER_A]: new Error('connect refused') });
+  t.after(down.restore);
+  assert.deepEqual(await peer.keys(), [key('peer-1')], 'the failing fetch still leaves the grace period intact');
+  assert.deepEqual(await peer.keys(), [key('peer-1')], 'and the backoff must not drop them either');
+  assert.equal(down.calls.length, 1);
+});
+
+test('PEER_JWKS_RETRY_AFTER=0 keeps retrying on every request', async (t) => {
+  const stub = fetchStub({ [PEER_A]: new Error('connect refused') });
+  t.after(stub.restore);
+  const peer = createPeerJwks(configWith({ PEER_JWKS_CACHE_TTL: '0', PEER_JWKS_RETRY_AFTER: '0' }), {});
+
+  await peer.keys();
+  await peer.keys();
+  assert.equal(stub.calls.length, 2);
+});
+
+test('a peer that comes back is picked up as soon as its backoff lapses', async (t) => {
+  const peer = createPeerJwks(configWith({ PEER_JWKS_CACHE_TTL: '0', PEER_JWKS_RETRY_AFTER: '0' }), {});
+
+  const down = fetchStub({ [PEER_A]: new Error('connect refused') });
+  assert.deepEqual(await peer.keys(), []);
+  down.restore();
+
+  const up = fetchStub({ [PEER_A]: { keys: [key('peer-1')] } });
+  t.after(up.restore);
+  assert.deepEqual(await peer.keys(), [key('peer-1')], 'a success must clear the backoff, not wait it out');
+});
+
 test('a response with no keys array is treated the same as unreachable', async (t) => {
   const stub = fetchStub({ [PEER_A]: { notKeys: [] } });
   t.after(stub.restore);
