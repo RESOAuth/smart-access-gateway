@@ -136,11 +136,11 @@ function awsEndpoint(env, service) {
  * raised to nine and told, rather than refused a start, because refusing to
  * boot on upgrade is a worse failure than a longer code.
  */
-function codeLength(env, warnings) {
+function codeLength(env, internalWarnings) {
   const key = alias(env, ['OTP_CODE_LENGTH', 'OTP_DIGITS']);
   const requested = int(env, key, 9, { min: 1, max: 12 });
   if (requested >= 9) return requested;
-  warnings.push(
+  internalWarnings.push(
     key + ' is ' + requested + ', which is below the minimum of 9, so 9 is being used. See docs/limitations.md.',
   );
   return 9;
@@ -597,18 +597,18 @@ function readStaticClients(env, problems) {
  * give one bad entry among several: a typo in one peer should cost this
  * instance that one peer's keys, not its ability to run at all.
  */
-function readPeerJwksUrls(env, devMode, warnings) {
+function readPeerJwksUrls(env, devMode, internalWarnings) {
   const urls = [];
   for (const raw of list(env, 'PEER_JWKS_URLS')) {
     let u;
     try {
       u = new URL(raw);
     } catch {
-      warnings.push('Ignoring PEER_JWKS_URLS entry "' + raw + '": not an absolute URL.');
+      internalWarnings.push('Ignoring PEER_JWKS_URLS entry "' + raw + '": not an absolute URL.');
       continue;
     }
     if (u.protocol !== 'https:' && !(u.protocol === 'http:' && devMode)) {
-      warnings.push('Ignoring PEER_JWKS_URLS entry "' + raw + '": must be an https URL outside development.');
+      internalWarnings.push('Ignoring PEER_JWKS_URLS entry "' + raw + '": must be an https URL outside development.');
       continue;
     }
     urls.push(u.href);
@@ -658,7 +658,7 @@ function corsOriginsFromClients(staticClients, devMode) {
  * refusing the whole deployment to start, the same tolerance readPeerJwksUrls
  * gives one bad peer.
  */
-function readCorsOrigins(env, devMode, staticClients, warnings) {
+function readCorsOrigins(env, devMode, staticClients, internalWarnings) {
   if (!bool(env, 'CORS_ENABLED', true)) return [];
 
   const origins = corsOriginsFromClients(staticClients, devMode);
@@ -671,15 +671,15 @@ function readCorsOrigins(env, devMode, staticClients, warnings) {
     try {
       u = new URL(raw);
     } catch {
-      warnings.push('Ignoring CORS_ALLOWED_ORIGINS entry "' + raw + '": not an absolute URL.');
+      internalWarnings.push('Ignoring CORS_ALLOWED_ORIGINS entry "' + raw + '": not an absolute URL.');
       continue;
     }
     if (u.protocol !== 'https:' && !(u.protocol === 'http:' && devMode)) {
-      warnings.push('Ignoring CORS_ALLOWED_ORIGINS entry "' + raw + '": must be an https origin outside development.');
+      internalWarnings.push('Ignoring CORS_ALLOWED_ORIGINS entry "' + raw + '": must be an https origin outside development.');
       continue;
     }
     if (u.origin !== raw) {
-      warnings.push(
+      internalWarnings.push(
         'Ignoring CORS_ALLOWED_ORIGINS entry "' + raw + '": an origin has no path, query or fragment; use "' + u.origin + '".',
       );
       continue;
@@ -704,6 +704,12 @@ export function loadConfig(env = {}, opts = {}) {
   assertNothingSealed(env);
 
   const problems = [];
+  // Two audiences, and the split is a security boundary rather than tidiness.
+  // `warnings` is published by /healthz to anybody who asks, so nothing in it
+  // may quote a configured value back: a rejected entry is usually a typo in
+  // an internal hostname, and an unauthenticated endpoint is not the place to
+  // hand one out. `internalWarnings` goes to the start-up banner and the log,
+  // where the audience is known - see docs/operations.md.
   const warnings = [];
   const internalWarnings = [];
 
@@ -840,7 +846,7 @@ export function loadConfig(env = {}, opts = {}) {
   const configuredCookieName = str(env, 'SESSION_COOKIE_NAME', 'sag_session');
 
   const peerJwks = {
-    urls: readPeerJwksUrls(env, devMode, warnings),
+    urls: readPeerJwksUrls(env, devMode, internalWarnings),
     // How often to refresh a peer that is answering. Matches the cache
     // header already on /jwks.json: long enough to spare a fetch per
     // token verification, short enough that a genuine key rotation is
@@ -932,7 +938,7 @@ export function loadConfig(env = {}, opts = {}) {
       // access token from its own server, it just cannot do it from
       // JavaScript running on a page.
       enabled: bool(env, 'CORS_ENABLED', true),
-      allowedOrigins: readCorsOrigins(env, devMode, staticClients, warnings),
+      allowedOrigins: readCorsOrigins(env, devMode, staticClients, internalWarnings),
     },
 
     clients: {
@@ -980,7 +986,7 @@ export function loadConfig(env = {}, opts = {}) {
       // attempt counter can be rolled back by resubmitting an older form.
       // Six digits would not be. Confusable characters (0, O, 1, I, L, U) are
       // not in the alphabet at all, so there is nothing to mistype.
-      codeLength: codeLength(env, warnings),
+      codeLength: codeLength(env, internalWarnings),
       // Somebody who set OTP_DIGITS meant digits, so honour that unless they
       // have since said otherwise.
       codeAlphabet: oneOf(

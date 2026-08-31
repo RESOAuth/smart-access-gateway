@@ -69,8 +69,8 @@ test('a malformed or path-carrying CORS_ALLOWED_ORIGINS entry is dropped, not fa
     CORS_ALLOWED_ORIGINS: [APP_ORIGIN, 'not-a-url', 'https://other.example.com/some/path'].join(','),
   });
   assert.deepEqual(config.cors.allowedOrigins, [APP_ORIGIN]);
-  assert.ok(config.warnings.some((w) => w.includes('not-a-url')));
-  assert.ok(config.warnings.some((w) => /has no path, query or fragment/.test(w)));
+  assert.ok(config.internalWarnings.some((w) => w.includes('not-a-url')));
+  assert.ok(config.internalWarnings.some((w) => /has no path, query or fragment/.test(w)));
 });
 
 test('a plain http CORS_ALLOWED_ORIGINS entry is refused outside development', () => {
@@ -80,7 +80,7 @@ test('a plain http CORS_ALLOWED_ORIGINS entry is refused outside development', (
     CORS_ALLOWED_ORIGINS: 'http://app.example.com',
   });
   assert.deepEqual(config.cors.allowedOrigins, []);
-  assert.ok(config.warnings.some((w) => /must be an https origin/.test(w)));
+  assert.ok(config.internalWarnings.some((w) => /must be an https origin/.test(w)));
 });
 
 // ---------------------------------------------------------------------------
