@@ -31,6 +31,8 @@ on a website. Do not copy the design notes below to the user documentation.
   migration runs.
 - [best-practices.md](best-practices.md) - evidence for the OpenSSF Best
   Practices passing criteria.
+- [security-review.md](security-review.md) - a point-in-time review against
+  OWASP, MITRE ATT&CK, and the OpenSSF criteria, with what it found.
 - [adr/](adr/README.md) - why SAG's decisions were made, one record each.
 - [rfcs/](rfcs/README.md) - proposed but not yet decided, with the reasoning.
 - [../test/local-stack/](../test/local-stack/README.md) - a container, workerd,
