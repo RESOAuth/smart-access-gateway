@@ -249,7 +249,15 @@ export async function completeUpstream(ctx, upstream, { code, stateTx }) {
   });
   provider.verifyClaims(upstream, claims);
 
-  const email = normaliseEmail(claims.email || claims.preferred_username || claims.upn);
+  // `preferred_username` and `upn` are login identifiers, not assertions that
+  // the mailbox exists and belongs to this account. On a domain-specific
+  // upstream that distinction is academic, because the domain check below
+  // bounds whatever comes back to the organisation the upstream was
+  // configured for. On a `common` upstream nothing bounds it, so only a claim
+  // the provider offers as the address is accepted. See ADR 0019.
+  const email = normaliseEmail(
+    upstream.isCommon ? claims.email : claims.email || claims.preferred_username || claims.upn,
+  );
   if (!email) {
     throw new Error('the upstream did not return an email address for this account');
   }
@@ -258,16 +266,29 @@ export async function completeUpstream(ctx, upstream, { code, stateTx }) {
   if (claims.email_verified === false) {
     throw new Error('the upstream reports this email address as unverified');
   }
-  // A domain-specific upstream must not be able to assert an address outside
-  // the domain it was configured for.
-  if (!upstream.isCommon) {
-    const domain = domainOf(email);
-    if (domain !== upstream.domain && !domain.endsWith('.' + upstream.domain)) {
-      throw new Error('the upstream returned an address outside the domain it is configured for');
-    }
-  }
+  assertAddressAllowed(upstream, email);
 
   return { email, claims, upstream };
+}
+
+/**
+ * Which addresses this upstream is allowed to assert.
+ *
+ * A domain-specific upstream is bounded by the domain in its own CLIENT_ID: it
+ * was configured to authenticate one organisation, so an address outside that
+ * organisation is a mistake or an attack either way. A `common` upstream has
+ * no such bound by construction, which is what ALLOWED_DOMAINS is for.
+ */
+function assertAddressAllowed(upstream, email) {
+  const domain = domainOf(email);
+  const within = (parent) => domain === parent || domain.endsWith('.' + parent);
+
+  if (!upstream.isCommon && !within(upstream.domain)) {
+    throw new Error('the upstream returned an address outside the domain it is configured for');
+  }
+  if (upstream.allowedDomains?.length && !upstream.allowedDomains.some(within)) {
+    throw new Error('the upstream returned an address outside this upstream\'s allowed domains');
+  }
 }
 
 async function verifyUpstreamIdToken(upstream, metadata, token, { nonce, clockSkew, maxAge, allowHttp }) {

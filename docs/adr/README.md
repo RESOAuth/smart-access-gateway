@@ -42,3 +42,4 @@ decision here leaves open.
 | [0016](0016-redirect-schemes-are-permissive-by-default.md) | Redirect schemes are permissive by default, with an optional allow-list |
 | [0017](0017-short-subject-salts-warn-without-forcing-rotation.md) | Short subject salts warn without forcing rotation |
 | [0018](0018-sealed-environment-variables.md) | Any environment variable's value can be a sealed reference into an AWS secret store |
+| [0019](0019-a-common-upstream-must-bound-what-it-may-assert.md) | A `common` upstream bounds the tenants or domains it may assert, and reads the address from `email` only |

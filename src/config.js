@@ -329,6 +329,8 @@ const UPSTREAM_FIELDS = [
   'LABEL',
   'PROMPT',
   'ACR_VALUES',
+  'ALLOWED_DOMAINS',
+  'ALLOWED_TENANTS',
   'ENABLED',
   'DISCOVERY',
   'MAIL_PROVIDER',
@@ -421,6 +423,16 @@ function readUpstreams(env, problems) {
       label: fields.LABEL,
       prompt: fields.PROMPT,
       acrValues: fields.ACR_VALUES ? fields.ACR_VALUES.split(/[,\s]+/).filter(Boolean) : undefined,
+      // What a `common` upstream is allowed to assert. A domain-specific
+      // upstream is already bounded by the domain in its CLIENT_ID; a common
+      // one is bounded by nothing at all unless one of these is set. See
+      // docs/adr/0019.
+      allowedDomains: fields.ALLOWED_DOMAINS
+        ? fields.ALLOWED_DOMAINS.split(/[,\s]+/).filter(Boolean).map((d) => d.toLowerCase().replace(/^\*?\./, ''))
+        : [],
+      allowedTenants: fields.ALLOWED_TENANTS
+        ? fields.ALLOWED_TENANTS.split(/[,\s]+/).filter(Boolean).map((t) => t.toLowerCase())
+        : [],
       useDiscovery: fields.DISCOVERY === undefined ? undefined : !['0', 'false', 'no', 'off'].includes(fields.DISCOVERY.toLowerCase()),
       // Which mail fingerprint this upstream answers to, for the DNS hint in
       // src/upstream/dns.js. Only needed for a provider SAG has no built-in
@@ -1106,6 +1118,19 @@ export function loadConfig(env = {}, opts = {}) {
     // them, and nothing that answers a request does.
     internalWarnings,
   };
+
+  // A `common` upstream accepts any organisation the provider will federate,
+  // and a `sub` here is derived from the address alone, so an unbounded one
+  // lets any of them assert any address. See ADR 0019.
+  for (const upstream of upstreams) {
+    if (!upstream.isCommon || upstream.allowedDomains.length || upstream.allowedTenants.length) continue;
+    internalWarnings.push(
+      'Upstream ' + upstream.id + ' is configured for any organisation the provider will federate, and nothing ' +
+        'bounds the addresses it may assert. Set UPSTREAM_' + upstream.provider.toUpperCase() + '_' + upstream.slug.toUpperCase() +
+        '_ALLOWED_DOMAINS, or _ALLOWED_TENANTS, unless signing in anybody the provider recognises is genuinely intended. ' +
+        'See docs/adr/0019-a-common-upstream-must-bound-what-it-may-assert.md.',
+    );
+  }
 
   if (stateStore.backend === 'memory' && !devMode) {
     internalWarnings.push(

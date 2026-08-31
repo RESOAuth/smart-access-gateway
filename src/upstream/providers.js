@@ -31,10 +31,16 @@ export const PROVIDERS = {
       return p;
     },
     verifyClaims: (u, claims) => {
+      const tid = String(claims.tid || '').toLowerCase();
+      // The strongest bound available on a multi-tenant upstream, and the only
+      // one that is about who is asserting rather than what they asserted:
+      // `tid` is issued by Microsoft, not set in the directory. See ADR 0019.
+      if (u.allowedTenants?.length && !u.allowedTenants.includes(tid)) {
+        throw new Error('this Microsoft sign-in is from a tenant this upstream does not accept');
+      }
       if (u.isCommon) return;
       // A tenant-pinned upstream must not accept a guest from elsewhere.
-      const tid = claims.tid;
-      if (u.tenant && tid && u.tenant !== 'common' && u.tenant !== 'organizations' && tid !== u.tenant) {
+      if (u.tenant && tid && u.tenant !== 'common' && u.tenant !== 'organizations' && tid !== u.tenant.toLowerCase()) {
         throw new Error('this Microsoft sign-in is from a different tenant');
       }
     },

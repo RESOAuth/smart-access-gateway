@@ -7,6 +7,8 @@ import { createStubProvider, readUpstreamRedirect } from './upstream-stub.js';
 import { clearUpstreamMetadataCache, upstreamMetadata } from '../src/upstream/index.js';
 import { clearJwksCache, verifyCompact, decodeJwt } from '../src/crypto/jose.js';
 import { ACR } from '../src/acr.js';
+import { PROVIDERS } from '../src/upstream/providers.js';
+import { loadConfig } from '../src/config.js';
 
 const UPSTREAM_CLIENT = 'upstream-client-id';
 
@@ -290,6 +292,128 @@ test('a domain-specific upstream takes precedence over a common one', async (t) 
   const other = await untilUpstream(sag, { email: 'person@somewhere.test' });
   const otherSent = readUpstreamRedirect(other.handoff);
   assert.equal(otherSent.params.client_id, 'common-client-id');
+});
+
+// ---------------------------------------------------------------------------
+// What a common upstream is allowed to assert. See ADR 0019.
+// ---------------------------------------------------------------------------
+
+/** One common upstream at the stub, and a sign-in that reaches the callback. */
+async function commonScenario(extra = {}) {
+  clearUpstreamMetadataCache();
+  clearJwksCache();
+  const stub = await createStubProvider();
+  const restore = stub.install();
+  const sag = createInstance({
+    UPSTREAM_OIDC_COMMON_CLIENT_ID: 'common:' + UPSTREAM_CLIENT,
+    UPSTREAM_OIDC_COMMON_ISSUER: stub.issuer,
+    ...extra,
+  });
+  return { stub, sag, restore };
+}
+
+/** Hand the stub these claims and follow the callback back to SAG. */
+async function signInVia(stub, sag, email, claims) {
+  const { handoff } = await untilUpstream(sag, { email });
+  const sent = readUpstreamRedirect(handoff);
+  await stub.expect({ audience: UPSTREAM_CLIENT, nonce: sent.nonce, claims });
+  return sag.raw('/callback?code=upstream-code&state=' + encodeURIComponent(sent.state));
+}
+
+test('a common upstream reads the address from email, never a login identifier', async (t) => {
+  // preferred_username and upn are directory attributes a tenant sets, and no
+  // provider verifies the domain in them. With no domain of its own to check
+  // against, a common upstream must not accept either.
+  const { stub, sag, restore } = await commonScenario();
+  t.after(restore);
+
+  const back = await signInVia(stub, sag, 'person@somewhere.test', {
+    preferred_username: 'finance@victim.test',
+    upn: 'finance@victim.test',
+  });
+
+  assert.equal(back.status, 400);
+  assert.match(await back.text(), /did not complete/);
+});
+
+test('a domain-specific upstream still falls back to upn, because its domain bounds it', async (t) => {
+  const { stub, sag, restore } = await scenario();
+  t.after(restore);
+
+  const back = await signInVia(stub, sag, 'person@acme.test', { upn: 'person@acme.test' });
+
+  assert.equal(back.status, 303);
+  assert.ok(new URL(back.headers.get('location')).searchParams.get('code'));
+});
+
+test('ALLOWED_DOMAINS bounds what a common upstream may assert', async (t) => {
+  const { stub, sag, restore } = await commonScenario({
+    UPSTREAM_OIDC_COMMON_ALLOWED_DOMAINS: 'allowed.test',
+  });
+  t.after(restore);
+
+  const refused = await signInVia(stub, sag, 'person@somewhere.test', {
+    email: 'finance@victim.test',
+    email_verified: true,
+  });
+  assert.equal(refused.status, 400, 'an address outside the allowed domains must be refused');
+});
+
+test('ALLOWED_DOMAINS admits a subdomain of an allowed domain', async (t) => {
+  const { stub, sag, restore } = await commonScenario({
+    UPSTREAM_OIDC_COMMON_ALLOWED_DOMAINS: 'allowed.test',
+  });
+  t.after(restore);
+
+  const back = await signInVia(stub, sag, 'person@eu.allowed.test', {
+    email: 'person@eu.allowed.test',
+    email_verified: true,
+  });
+  assert.equal(back.status, 303);
+  assert.ok(new URL(back.headers.get('location')).searchParams.get('code'));
+});
+
+test('an unbounded common upstream is warned about, on the operator channel only', async () => {
+  const sag = createInstance({
+    UPSTREAM_MICROSOFT_COMMON_CLIENT_ID: 'common:ms-common',
+    UPSTREAM_MICROSOFT_COMMON_CLIENT_SECRET: 'x',
+  });
+  const config = loadConfig(sag.env);
+
+  assert.ok(
+    config.internalWarnings.some((w) => /nothing bounds the addresses it may assert/.test(w)),
+    'the operator should be told',
+  );
+  const { body } = await sag.json('/healthz');
+  assert.ok(
+    !JSON.stringify(body).includes('bounds the addresses'),
+    'but which defences are absent is not published to strangers',
+  );
+});
+
+test('a bounded common upstream draws no warning', () => {
+  const config = loadConfig({
+    SAG_ISSUER: 'http://localhost:8787',
+    SAG_SECRET: 'test-secret-'.repeat(4),
+    UPSTREAM_MICROSOFT_COMMON_CLIENT_ID: 'common:ms-common',
+    UPSTREAM_MICROSOFT_COMMON_CLIENT_SECRET: 'x',
+    UPSTREAM_MICROSOFT_COMMON_ALLOWED_TENANTS: '11111111-2222-3333-4444-555555555555',
+  });
+  assert.ok(!config.internalWarnings.some((w) => /nothing bounds the addresses/.test(w)));
+});
+
+test('an unknown Microsoft tenant is refused when ALLOWED_TENANTS is set', () => {
+  const upstream = {
+    provider: 'microsoft',
+    isCommon: true,
+    allowedTenants: ['11111111-2222-3333-4444-555555555555'],
+  };
+  const verify = PROVIDERS.microsoft.verifyClaims;
+
+  assert.throws(() => verify(upstream, { tid: '99999999-9999-9999-9999-999999999999' }), /does not accept/);
+  assert.doesNotThrow(() => verify(upstream, { tid: '11111111-2222-3333-4444-555555555555' }));
+  // A token with no tid at all cannot satisfy an allow-list either.
+  assert.throws(() => verify(upstream, {}), /does not accept/);
 });
 
 test('an upstream token exchange failure falls back to an email code', async (t) => {

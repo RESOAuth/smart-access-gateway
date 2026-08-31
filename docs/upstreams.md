@@ -41,6 +41,8 @@ variables and is otherwise meaningless; the domain comes from the value.
 | `CLIENT_ID` | `<domain>:<client id>`, or `common:<client id>` |
 | `CLIENT_SECRET` | The provider's secret |
 | `TENANT` | Microsoft tenant id or domain. Defaults to `common` |
+| `ALLOWED_DOMAINS` | Email domains this upstream may assert, subdomains included. Only meaningful on a `common` upstream: a domain-specific one is already bounded by its own `CLIENT_ID` |
+| `ALLOWED_TENANTS` | Microsoft tenant ids (`tid`) this upstream accepts. The stronger of the two bounds, because `tid` is issued by Microsoft rather than set in a directory |
 | `HD` | Google hosted domain, sent as a hint and checked again in the claims |
 | `SCOPES` | Defaults to `openid email profile` |
 | `LABEL` | What the button says: "Continue with ..." |
@@ -141,6 +143,35 @@ one tenant administrator could sign in as anybody.
 
 The same check applies to Google's `hd`: it is sent as a hint, and then
 verified in the returned claims rather than trusted because it was asked for.
+
+### A common upstream has no such domain to check
+
+That rule is what the domain in a `CLIENT_ID` buys, and a `common` upstream
+does not have one. It accepts any organisation the provider will federate, and
+a `sub` here is derived from the address alone, so an unbounded `common`
+upstream means any of those organisations can assert any address.
+
+That matters most on Microsoft, where `mail`, `preferred_username`, and the
+user principal name are all directory attributes a tenant administrator sets
+and Microsoft does not verify the domain in. A `common` upstream therefore
+reads the address from `email` only - never `preferred_username` or `upn`,
+which are login identifiers rather than an assertion about a mailbox - and
+should say which organisations it is for:
+
+```sh
+# Only these tenants, checked against the tid Microsoft issues
+UPSTREAM_MICROSOFT_COMMON_ALLOWED_TENANTS=11111111-2222-3333-4444-555555555555
+
+# Or: any tenant, but only these addresses
+UPSTREAM_MICROSOFT_COMMON_ALLOWED_DOMAINS=example.com,example.org
+```
+
+Prefer `ALLOWED_TENANTS` where the tenants are known: it bounds who is
+asserting, which a directory administrator cannot change, rather than what
+they asserted. Setting neither is allowed, because "anybody the provider
+recognises" is a real deployment, but SAG says so at start-up until one is
+chosen. See
+[ADR 0019](adr/0019-a-common-upstream-must-bound-what-it-may-assert.md).
 
 ## What the relying party sees
 
