@@ -162,6 +162,29 @@ still be unforgeable, but a KMS reply travelling in clear is a signature
 anybody on the path can replace, and an S3 reply is the relying party register
 itself.
 
+### Sealed environment variables
+
+Any environment variable's value can be pasted as a reference into an AWS
+secret store, instead of in plain text:
+
+| Marker | Resolves to |
+| --- | --- |
+| `aws:kms:<ciphertext>` | The base64 output of `aws kms encrypt` |
+| `aws:secretsmanager:<secret id>` | A Secrets Manager secret, by name or ARN |
+| `aws:ssm:<name>` | An SSM parameter (`WithDecryption` is always requested, so a `SecureString` is unwrapped) |
+
+Resolution happens once per warm instance, before configuration is parsed,
+using the same signed-HTTPS call as everything else under `src/keys/`, so it
+works identically on Lambda, ECS, EC2 or a plain Node process: whichever one
+hands SAG ambient AWS credentials (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`
+/ `AWS_SESSION_TOKEN`) and `AWS_REGION`. A deployment with nothing sealed
+makes no AWS call and needs no AWS credentials at all. A failure to resolve
+is a startup error, never a silent fall-back to the reference itself.
+
+`AWS_ENDPOINT_URL_KMS`, `AWS_ENDPOINT_URL_SECRETS_MANAGER` and
+`AWS_ENDPOINT_URL_SSM` (or the global `AWS_ENDPOINT_URL`) apply here too, for
+a local stack.
+
 [test/local-stack/](../test/local-stack/README.md) is a worked example: an
 instance signing with KMS, counting in DynamoDB and reading its clients from a
 bucket, all of it local.

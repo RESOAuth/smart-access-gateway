@@ -8,6 +8,7 @@
 
 import { loadConfig, assertUsable } from './config.js';
 import { createSignerSet } from './keys/registry.js';
+import { unsealEnv } from './keys/sealedEnv.js';
 import { createEmailSender } from './email/index.js';
 import { resolveClient } from './clients/index.js';
 import { createClientStore } from './clients/store.js';
@@ -44,6 +45,11 @@ function cacheFor(env) {
 export async function createContext(env, request, opts = {}) {
   const url = new URL(request.url);
   const slot = cacheFor(env);
+
+  // Unsealing is a KMS round trip, so it happens once per isolate like
+  // everything else below - never per request.
+  if (!slot.env) slot.env = await unsealEnv(env);
+  env = slot.env;
 
   if (!slot.config) {
     slot.config = loadConfig(env, { requestUrl: opts.requestUrl ?? request.url });

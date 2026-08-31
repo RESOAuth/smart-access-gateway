@@ -7,6 +7,7 @@
 
 import { ALGS, isPostQuantum } from './crypto/jose.js';
 import { SUPPORTED_ACR_VALUES } from './acr.js';
+import { SEALED_MARKERS } from './keys/sealedEnv.js';
 
 const DEV_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1', '0.0.0.0', 'host.docker.internal']);
 
@@ -176,6 +177,25 @@ export class ConfigError extends Error {
 
 /** Turn an algorithm name into an environment-variable-safe suffix. */
 export const algEnvSuffix = (alg) => alg.toUpperCase().replaceAll('-', '_');
+
+/**
+ * A still-sealed value reaching here means unsealing did not happen -
+ * `loadConfig` runs after `unsealEnv` (src/keys/sealedEnv.js), never before
+ * it. Treating the raw reference as the literal secret would not obviously
+ * fail: a ciphertext blob or a secret ARN is long enough to pass most shape
+ * checks, so this is a hard error rather than a `problems` entry a
+ * deployment could run with anyway.
+ */
+function assertNothingSealed(env) {
+  for (const [key, value] of Object.entries(env ?? {})) {
+    if (typeof value === 'string' && SEALED_MARKERS.some((marker) => value.startsWith(marker))) {
+      throw new ConfigError(
+        key + ' is still sealed. Configuration must be built from an environment already unsealed ' +
+          'by unsealEnv() (src/keys/sealedEnv.js), not passed to loadConfig directly.',
+      );
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Issuer
@@ -681,6 +701,8 @@ function readCorsOrigins(env, devMode, staticClients, warnings) {
  * @param {string} [opts.requestUrl] Used to derive the issuer when unset
  */
 export function loadConfig(env = {}, opts = {}) {
+  assertNothingSealed(env);
+
   const problems = [];
   const warnings = [];
   const internalWarnings = [];
