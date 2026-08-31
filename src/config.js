@@ -889,9 +889,6 @@ export function loadConfig(env = {}, opts = {}) {
           : '__Host-' + configuredCookieName,
       idleTtlSeconds: int(env, 'SESSION_TTL', 12 * 3600, { min: 60, max: 90 * 86400 }),
       maxLifetimeSeconds: sessionMaxLifetimeSeconds,
-      // When sessions are per relying party, a prompt=none request can still be
-      // answered from the shared session if the operator allows it.
-      promptNoneUsesSharedSession: bool(env, 'PROMPT_NONE_SHARED_SESSION', true),
       promptConsentMode: oneOf(env, 'PROMPT_CONSENT_MODE', ['continue', 'off'], 'continue'),
       // Whether a relying party asking to sign out gets an interstitial first.
       // "auto" asks only when the session is shared, so the person is told
