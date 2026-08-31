@@ -24,7 +24,15 @@ import {
   STAGE,
 } from '../oauth/transaction.js';
 import { issueCode } from '../oauth/code.js';
-import { readSession, newSession, reauthenticate, sessionCookie, sessionIsFresh, sessionClientFor } from '../session.js';
+import {
+  readSession,
+  newSession,
+  reauthenticate,
+  touch,
+  sessionCookie,
+  sessionIsFresh,
+  sessionClientFor,
+} from '../session.js';
 import { subjectFor, identityEmail, normaliseEmail, looksLikeEmail, emailTag } from '../identity.js';
 import { satisfies, requiresFederation, acrFromUpstream, acrForOtp } from '../acr.js';
 import { generateCode, digestCode, verifyCode, otpAllowed, alphabetFor } from '../otp.js';
@@ -714,7 +722,14 @@ async function offerFallback(ctx, tx, detail) {
  * person who completes a sign-in is immediately able to answer the next
  * relying party silently.
  */
-async function complete(ctx, { tx, client, session, refreshCookie }) {
+async function complete(ctx, { tx, client, session: authenticated, refreshCookie }) {
+  // Answering a request is what counts as using the session, and this is the
+  // only place that happens, so it is where the idle timeout rolls forward.
+  // `touch` never pushes past the absolute cap, so a session still cannot be
+  // kept alive indefinitely. A session that has just been created or
+  // re-authenticated is already at its full idle window, so this is a no-op
+  // for those.
+  const session = refreshCookie ? touch(ctx.config, authenticated) : authenticated;
   // The session holds the address as it was typed; this is where one relying
   // party's view of it is settled, so that a per-client SANITISE_PLUS_EMAILS
   // and a shared session can coexist.
