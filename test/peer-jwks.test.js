@@ -52,7 +52,7 @@ function fetchStub(script) {
 test('PEER_JWKS_URLS accepts several URLs and drops a malformed one', () => {
   const config = loadConfig({ SAG_ISSUER: 'https://auth.example.com', SAG_SECRET: SECRET, PEER_JWKS_URLS: [PEER_A, 'not-a-url', PEER_B].join(',') });
   assert.deepEqual(config.peerJwks.urls, [PEER_A, PEER_B]);
-  assert.ok(config.warnings.some((w) => w.includes('not-a-url')));
+  assert.ok(config.internalWarnings.some((w) => w.includes('not-a-url')));
 });
 
 test('a plain http peer URL is dropped outside development', () => {
@@ -62,7 +62,7 @@ test('a plain http peer URL is dropped outside development', () => {
     PEER_JWKS_URLS: 'http://insecure.example.test/.well-known/jwks.json',
   });
   assert.deepEqual(config.peerJwks.urls, []);
-  assert.ok(config.warnings.some((w) => /must be an https URL/.test(w)));
+  assert.ok(config.internalWarnings.some((w) => /must be an https URL/.test(w)));
 });
 
 test('an http peer URL is fine in development', () => {

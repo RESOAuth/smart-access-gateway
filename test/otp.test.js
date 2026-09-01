@@ -96,7 +96,7 @@ test('a code shorter than nine characters is raised, and said out loud', () => {
   // deployment that pinned the old default is raised and told.
   const config = loadConfig({ SAG_ISSUER: 'http://localhost:8787', OTP_CODE_LENGTH: '6' });
   assert.equal(config.otp.codeLength, 9);
-  assert.ok(config.warnings.some((w) => /below the minimum of 9/.test(w)));
+  assert.ok(config.internalWarnings.some((w) => /below the minimum of 9/.test(w)));
 });
 
 test('somebody who asked for digits gets digits', () => {

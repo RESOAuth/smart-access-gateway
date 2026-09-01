@@ -60,3 +60,22 @@ test('upstreams are counted by provider, never named', async () => {
     assert.ok(!text.includes(secret), '/healthz must not disclose ' + secret);
   }
 });
+
+test('a rejected configuration entry is not quoted back to an anonymous caller', async () => {
+  // A rejected entry is almost always a typo in something internal, and
+  // /healthz answers anybody. The operator still gets the whole message, with
+  // the value in it, through the start-up banner and the log.
+  const sag = createInstance({
+    // Both are rejected: an origin may not carry a path, and a peer URL has to
+    // be absolute. Each rejection message quotes the value back.
+    CORS_ALLOWED_ORIGINS: 'https://internal-build.corp.example/callback',
+    PEER_JWKS_URLS: 'dr-site.corp.example/.well-known/jwks.json',
+    OTP_DIGITS: '6',
+  });
+  const { body } = await sag.json('/healthz');
+
+  const text = JSON.stringify(body);
+  for (const leaked of ['internal-build.corp.example', 'dr-site.corp.example', 'OTP_DIGITS']) {
+    assert.ok(!text.includes(leaked), '/healthz must not disclose ' + leaked);
+  }
+});
