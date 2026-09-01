@@ -44,37 +44,35 @@ whose `verifyClaims` is a no-op, and for Google without an `hd`. Google is the
 mildest of the three, because Google does verify the addresses it asserts and
 does send `email_verified`.
 
-The temptation is to fix this by tightening the claim rules alone - insist on
-`email`, treat a missing `email_verified` as unverified. Insisting on `email`
-is right and costs nothing, but it is not sufficient, because a tenant sets
-`mail` as freely as it sets the UPN. Treating a missing `email_verified` as
-unverified would be sufficient and would also refuse every genuine Entra
-sign-in, which is not a trade a deployment can accept.
-
-The honest reading is that this is not a claim-selection problem. It is that
-"any organisation in the world" was never a bound, and a domain-specific
-upstream has always had one - the domain in its own `CLIENT_ID`.
+Microsoft does publish a claim that answers the question directly. `xms_edov`
+is a boolean saying whether the domain of the `email` claim is one the user's
+own tenant has had verified, and it is the mitigation Microsoft names for
+nOAuth. It is an [optional
+claim](https://learn.microsoft.com/en-us/entra/identity-platform/optional-claims-reference),
+so Entra only sends it once the app registration asks for it, and it is only
+sent when `email` is present.
 
 ## Decision
 
-A `common` upstream states what it is allowed to assert, in one of two ways,
-and is warned about at start-up when it states neither.
+A `common` Microsoft upstream is bounded in one of two ways, and refuses a
+sign-in that satisfies neither.
 
-**`UPSTREAM_<PROVIDER>_<SLUG>_ALLOWED_DOMAINS`** - email domains this upstream
-may assert, subdomains included. This is the same check a domain-specific
-upstream already gets, made explicit and allowed to name more than one domain.
-It applies to every provider.
+**`UPSTREAM_<PROVIDER>_<SLUG>_ALLOWED_TENANTS`** - tenant ids this upstream
+accepts, checked against `tid`. This is the stronger of the two, because `tid`
+is issued by Microsoft rather than set in a directory: it bounds *who is
+asserting* rather than *what they asserted*. A deployment that knows its
+tenants should prefer it.
 
-**`UPSTREAM_<PROVIDER>_<SLUG>_ALLOWED_TENANTS`** - Microsoft tenant ids this
-upstream accepts, checked against `tid`. This is the stronger of the two,
-because `tid` is issued by Microsoft rather than set in a directory: it bounds
-*who is asserting* rather than *what they asserted*. A deployment that knows
-its tenants should prefer it.
+**The `xms_edov` claim.** Where the tenants are not known in advance, Entra
+itself says whether the tenant proved it owns the domain in the address. An
+upstream with no `ALLOWED_TENANTS` requires `xms_edov: true`; an `xms_edov` of
+`false` is refused either way, because a tenant being on the allow list does
+not make an address it has not verified into evidence.
 
-Neither is required, because a deployment that genuinely means "anybody the
-provider recognises" exists and should not be refused a start. Configuring
-neither raises a start-up warning naming the upstream and both variables, on
-the operator's channel rather than `/healthz`.
+Configuring neither, and not asking for the claim, is a configuration mistake
+rather than a deployment shape, so it draws a start-up warning naming the
+upstream, `ALLOWED_TENANTS`, and `xms_edov`. It is a warning and not a refusal
+to start because the app registration is not something SAG can see.
 
 Separately, and regardless of the above: a `common` upstream reads the address
 from `email` only. The fallback to `preferred_username` and then `upn` stays
@@ -83,27 +81,34 @@ back, and is removed where nothing does.
 
 ## Consequences
 
-A deployment using `UPSTREAM_MICROSOFT_COMMON_*` today keeps working and gets a
-start-up warning until it decides which bound it wants. That is deliberate:
-refusing to start would break running deployments over a risk they may have
-accepted knowingly, and silence would leave the default unsafe.
+A deployment using `UPSTREAM_MICROSOFT_COMMON_*` has to choose a bound. It
+gets a start-up warning saying so, and until it does, sign-ins through that
+upstream are refused. That is a break, and a deliberate one: the alternative is
+leaving an unbounded upstream working exactly as nOAuth describes. Either
+remedy is one change - a list of tenant ids, or `xms_edov` added to the app
+registration's `optionalClaims.idToken`.
 
 Some Microsoft accounts return `upn` but no `email` - typically where the
 directory has no `mail` attribute set. Those accounts could sign in through a
-`common` upstream before and cannot now. The fix for such a deployment is to
-configure the tenant as a domain-specific upstream, which is what it is, and
+`common` upstream before and cannot now, and `xms_edov` cannot help them,
+because Entra only sends it alongside `email`. The fix for such a deployment is
+to configure the tenant as a domain-specific upstream, which is what it is, and
 which restores the fallback along with a real bound.
 
-`ALLOWED_TENANTS` bounds the tenant but not the address, and `ALLOWED_DOMAINS`
-the reverse. A deployment wanting both sets both; they are checked
-independently and both must pass.
-
 None of this changes what a domain-specific upstream does, which was already
-bounded, and none of it touches the email OTP path, where SAG proves control of
-the mailbox itself.
+bounded by the domain in its own `CLIENT_ID`, and none of it touches the email
+OTP path, where SAG proves control of the mailbox itself. A `common` Google
+upstream is bounded by `HD` where a deployment wants it and by Google's own
+verification otherwise. A `common` generic `oidc` upstream is bounded by
+whatever its single configured issuer chooses to assert, which is the deal a
+deployment makes when it names that issuer.
 
-Two things this deliberately does not do. It does not treat a missing
-`email_verified` as unverified, for the reason above. And it does not
-distinguish a tenant SAG has seen before from one it has not, because that
-needs state, and this deployment shape has none by design
-([ADR 0001](0001-stateless-with-optional-state-store.md)).
+Three things this deliberately does not do. It does not treat a missing
+`email_verified` as unverified, because Entra never sends it and that would
+refuse every genuine Microsoft sign-in - `xms_edov` is the claim that answers
+the question Entra actually answers. It does not check `acct`, which
+distinguishes a member of the tenant from a guest, because a guest's address is
+already caught by the domain check on a domain-specific upstream and by
+`xms_edov` on a common one. And it does not distinguish a tenant SAG has seen
+before from one it has not, because that needs state, and this deployment shape
+has none by design ([ADR 0001](0001-stateless-with-optional-state-store.md)).

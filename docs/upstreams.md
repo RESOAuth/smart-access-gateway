@@ -41,8 +41,7 @@ variables and is otherwise meaningless; the domain comes from the value.
 | `CLIENT_ID` | `<domain>:<client id>`, or `common:<client id>` |
 | `CLIENT_SECRET` | The provider's secret |
 | `TENANT` | Microsoft tenant id or domain. Defaults to `common` |
-| `ALLOWED_DOMAINS` | Email domains this upstream may assert, subdomains included. Only meaningful on a `common` upstream: a domain-specific one is already bounded by its own `CLIENT_ID` |
-| `ALLOWED_TENANTS` | Microsoft tenant ids (`tid`) this upstream accepts. The stronger of the two bounds, because `tid` is issued by Microsoft rather than set in a directory |
+| `ALLOWED_TENANTS` | Microsoft tenant ids (`tid`) this upstream accepts. Only meaningful on a `common` upstream: a domain-specific one is already bounded by its own `CLIENT_ID` |
 | `HD` | Google hosted domain, sent as a hint and checked again in the claims |
 | `SCOPES` | Defaults to `openid email profile` |
 | `LABEL` | What the button says: "Continue with ..." |
@@ -155,22 +154,32 @@ That matters most on Microsoft, where `mail`, `preferred_username`, and the
 user principal name are all directory attributes a tenant administrator sets
 and Microsoft does not verify the domain in. A `common` upstream therefore
 reads the address from `email` only - never `preferred_username` or `upn`,
-which are login identifiers rather than an assertion about a mailbox - and
-should say which organisations it is for:
+which are login identifiers rather than an assertion about a mailbox - and has
+to say which tenants it is for:
 
 ```sh
 # Only these tenants, checked against the tid Microsoft issues
 UPSTREAM_MICROSOFT_COMMON_ALLOWED_TENANTS=11111111-2222-3333-4444-555555555555
-
-# Or: any tenant, but only these addresses
-UPSTREAM_MICROSOFT_COMMON_ALLOWED_DOMAINS=example.com,example.org
 ```
 
-Prefer `ALLOWED_TENANTS` where the tenants are known: it bounds who is
-asserting, which a directory administrator cannot change, rather than what
-they asserted. Setting neither is allowed, because "anybody the provider
-recognises" is a real deployment, but SAG says so at start-up until one is
-chosen. See
+Where the tenants are not known in advance, let Entra answer instead. Add the
+[`xms_edov` optional claim](https://learn.microsoft.com/en-us/entra/identity-platform/optional-claims-reference)
+to the app registration and Microsoft says, per sign-in, whether the tenant
+has had the domain of that address verified:
+
+```jsonc
+// App registration -> Token configuration, or the manifest directly
+"optionalClaims": {
+  "idToken": [{ "name": "xms_edov", "essential": false }]
+}
+```
+
+A `common` Microsoft upstream needs one of the two, and refuses sign-ins until
+it has one; SAG warns at start-up about the tenant list, because it cannot see
+your app registration. `ALLOWED_TENANTS` is the stronger of the two where you
+can use it - it bounds who is asserting, which a directory administrator
+cannot change, rather than what they asserted. An `xms_edov` of `false` is
+refused either way. See
 [ADR 0019](adr/0019-a-common-upstream-must-bound-what-it-may-assert.md).
 
 ## What the relying party sees

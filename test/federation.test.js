@@ -346,33 +346,6 @@ test('a domain-specific upstream still falls back to upn, because its domain bou
   assert.ok(new URL(back.headers.get('location')).searchParams.get('code'));
 });
 
-test('ALLOWED_DOMAINS bounds what a common upstream may assert', async (t) => {
-  const { stub, sag, restore } = await commonScenario({
-    UPSTREAM_OIDC_COMMON_ALLOWED_DOMAINS: 'allowed.test',
-  });
-  t.after(restore);
-
-  const refused = await signInVia(stub, sag, 'person@somewhere.test', {
-    email: 'finance@victim.test',
-    email_verified: true,
-  });
-  assert.equal(refused.status, 400, 'an address outside the allowed domains must be refused');
-});
-
-test('ALLOWED_DOMAINS admits a subdomain of an allowed domain', async (t) => {
-  const { stub, sag, restore } = await commonScenario({
-    UPSTREAM_OIDC_COMMON_ALLOWED_DOMAINS: 'allowed.test',
-  });
-  t.after(restore);
-
-  const back = await signInVia(stub, sag, 'person@eu.allowed.test', {
-    email: 'person@eu.allowed.test',
-    email_verified: true,
-  });
-  assert.equal(back.status, 303);
-  assert.ok(new URL(back.headers.get('location')).searchParams.get('code'));
-});
-
 test('an unbounded common upstream is warned about, on the operator channel only', async () => {
   const sag = createInstance({
     UPSTREAM_MICROSOFT_COMMON_CLIENT_ID: 'common:ms-common',
@@ -381,8 +354,8 @@ test('an unbounded common upstream is warned about, on the operator channel only
   const config = loadConfig(sag.env);
 
   assert.ok(
-    config.internalWarnings.some((w) => /nothing bounds the addresses it may assert/.test(w)),
-    'the operator should be told',
+    config.internalWarnings.some((w) => /nothing bounds the addresses it may assert/.test(w) && /xms_edov/.test(w)),
+    'the operator should be told, and told both remedies',
   );
   const { body } = await sag.json('/healthz');
   assert.ok(
@@ -414,6 +387,38 @@ test('an unknown Microsoft tenant is refused when ALLOWED_TENANTS is set', () =>
   assert.doesNotThrow(() => verify(upstream, { tid: '11111111-2222-3333-4444-555555555555' }));
   // A token with no tid at all cannot satisfy an allow-list either.
   assert.throws(() => verify(upstream, {}), /does not accept/);
+});
+
+test('a common Microsoft upstream with no tenant list needs xms_edov', () => {
+  // Entra never sends email_verified, so xms_edov is the only claim that says
+  // the tenant proved it owns the domain in the address. See ADR 0019.
+  const upstream = { provider: 'microsoft', isCommon: true, allowedTenants: [] };
+  const verify = PROVIDERS.microsoft.verifyClaims;
+  const tid = '99999999-9999-9999-9999-999999999999';
+
+  assert.throws(() => verify(upstream, { tid }), /xms_edov/, 'an absent claim proves nothing');
+  assert.throws(() => verify(upstream, { tid, xms_edov: false }), /not in a domain the tenant has verified/);
+  assert.doesNotThrow(() => verify(upstream, { tid, xms_edov: true }));
+  // Entra has emitted the claim as a string as well as a boolean.
+  assert.doesNotThrow(() => verify(upstream, { tid, xms_edov: 'true' }));
+  assert.throws(() => verify(upstream, { tid, xms_edov: 'false' }), /not in a domain the tenant has verified/);
+});
+
+test('an unverified email domain is refused even from an allowed tenant', () => {
+  const tid = '11111111-2222-3333-4444-555555555555';
+  const upstream = { provider: 'microsoft', isCommon: true, allowedTenants: [tid] };
+  const verify = PROVIDERS.microsoft.verifyClaims;
+
+  assert.throws(() => verify(upstream, { tid, xms_edov: false }), /not in a domain the tenant has verified/);
+  // But an allowed tenant does not have to send the claim at all.
+  assert.doesNotThrow(() => verify(upstream, { tid }));
+});
+
+test('a domain-specific Microsoft upstream does not need xms_edov', () => {
+  // Its own CLIENT_ID domain is the bound, and the address is checked against
+  // it, so demanding an optional claim would only break working deployments.
+  const upstream = { provider: 'microsoft', isCommon: false, domain: 'acme.test', tenant: 'acme.test', allowedTenants: [] };
+  assert.doesNotThrow(() => PROVIDERS.microsoft.verifyClaims(upstream, { tid: 'acme.test' }));
 });
 
 test('an upstream token exchange failure falls back to an email code', async (t) => {

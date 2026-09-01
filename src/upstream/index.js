@@ -266,29 +266,17 @@ export async function completeUpstream(ctx, upstream, { code, stateTx }) {
   if (claims.email_verified === false) {
     throw new Error('the upstream reports this email address as unverified');
   }
-  assertAddressAllowed(upstream, email);
+  // A domain-specific upstream must not be able to assert an address outside
+  // the domain it was configured for. A common upstream has no domain of its
+  // own; what bounds it is in the provider's verifyClaims. See ADR 0019.
+  if (!upstream.isCommon) {
+    const domain = domainOf(email);
+    if (domain !== upstream.domain && !domain.endsWith('.' + upstream.domain)) {
+      throw new Error('the upstream returned an address outside the domain it is configured for');
+    }
+  }
 
   return { email, claims, upstream };
-}
-
-/**
- * Which addresses this upstream is allowed to assert.
- *
- * A domain-specific upstream is bounded by the domain in its own CLIENT_ID: it
- * was configured to authenticate one organisation, so an address outside that
- * organisation is a mistake or an attack either way. A `common` upstream has
- * no such bound by construction, which is what ALLOWED_DOMAINS is for.
- */
-function assertAddressAllowed(upstream, email) {
-  const domain = domainOf(email);
-  const within = (parent) => domain === parent || domain.endsWith('.' + parent);
-
-  if (!upstream.isCommon && !within(upstream.domain)) {
-    throw new Error('the upstream returned an address outside the domain it is configured for');
-  }
-  if (upstream.allowedDomains?.length && !upstream.allowedDomains.some(within)) {
-    throw new Error('the upstream returned an address outside this upstream\'s allowed domains');
-  }
 }
 
 async function verifyUpstreamIdToken(upstream, metadata, token, { nonce, clockSkew, maxAge, allowHttp }) {
