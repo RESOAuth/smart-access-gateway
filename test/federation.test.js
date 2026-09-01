@@ -7,6 +7,8 @@ import { createStubProvider, readUpstreamRedirect } from './upstream-stub.js';
 import { clearUpstreamMetadataCache, upstreamMetadata } from '../src/upstream/index.js';
 import { clearJwksCache, verifyCompact, decodeJwt } from '../src/crypto/jose.js';
 import { ACR } from '../src/acr.js';
+import { PROVIDERS } from '../src/upstream/providers.js';
+import { loadConfig } from '../src/config.js';
 
 const UPSTREAM_CLIENT = 'upstream-client-id';
 
@@ -290,6 +292,133 @@ test('a domain-specific upstream takes precedence over a common one', async (t) 
   const other = await untilUpstream(sag, { email: 'person@somewhere.test' });
   const otherSent = readUpstreamRedirect(other.handoff);
   assert.equal(otherSent.params.client_id, 'common-client-id');
+});
+
+// ---------------------------------------------------------------------------
+// What a common upstream is allowed to assert. See ADR 0019.
+// ---------------------------------------------------------------------------
+
+/** One common upstream at the stub, and a sign-in that reaches the callback. */
+async function commonScenario(extra = {}) {
+  clearUpstreamMetadataCache();
+  clearJwksCache();
+  const stub = await createStubProvider();
+  const restore = stub.install();
+  const sag = createInstance({
+    UPSTREAM_OIDC_COMMON_CLIENT_ID: 'common:' + UPSTREAM_CLIENT,
+    UPSTREAM_OIDC_COMMON_ISSUER: stub.issuer,
+    ...extra,
+  });
+  return { stub, sag, restore };
+}
+
+/** Hand the stub these claims and follow the callback back to SAG. */
+async function signInVia(stub, sag, email, claims) {
+  const { handoff } = await untilUpstream(sag, { email });
+  const sent = readUpstreamRedirect(handoff);
+  await stub.expect({ audience: UPSTREAM_CLIENT, nonce: sent.nonce, claims });
+  return sag.raw('/callback?code=upstream-code&state=' + encodeURIComponent(sent.state));
+}
+
+test('a common upstream reads the address from email, never a login identifier', async (t) => {
+  // preferred_username and upn are directory attributes a tenant sets, and no
+  // provider verifies the domain in them. With no domain of its own to check
+  // against, a common upstream must not accept either.
+  const { stub, sag, restore } = await commonScenario();
+  t.after(restore);
+
+  const back = await signInVia(stub, sag, 'person@somewhere.test', {
+    preferred_username: 'finance@victim.test',
+    upn: 'finance@victim.test',
+  });
+
+  assert.equal(back.status, 400);
+  assert.match(await back.text(), /did not complete/);
+});
+
+test('a domain-specific upstream still falls back to upn, because its domain bounds it', async (t) => {
+  const { stub, sag, restore } = await scenario();
+  t.after(restore);
+
+  const back = await signInVia(stub, sag, 'person@acme.test', { upn: 'person@acme.test' });
+
+  assert.equal(back.status, 303);
+  assert.ok(new URL(back.headers.get('location')).searchParams.get('code'));
+});
+
+test('an unbounded common upstream is warned about, on the operator channel only', async () => {
+  const sag = createInstance({
+    UPSTREAM_MICROSOFT_COMMON_CLIENT_ID: 'common:ms-common',
+    UPSTREAM_MICROSOFT_COMMON_CLIENT_SECRET: 'x',
+  });
+  const config = loadConfig(sag.env);
+
+  assert.ok(
+    config.internalWarnings.some((w) => /nothing bounds the addresses it may assert/.test(w) && /xms_edov/.test(w)),
+    'the operator should be told, and told both remedies',
+  );
+  const { body } = await sag.json('/healthz');
+  assert.ok(
+    !JSON.stringify(body).includes('bounds the addresses'),
+    'but which defences are absent is not published to strangers',
+  );
+});
+
+test('a bounded common upstream draws no warning', () => {
+  const config = loadConfig({
+    SAG_ISSUER: 'http://localhost:8787',
+    SAG_SECRET: 'test-secret-'.repeat(4),
+    UPSTREAM_MICROSOFT_COMMON_CLIENT_ID: 'common:ms-common',
+    UPSTREAM_MICROSOFT_COMMON_CLIENT_SECRET: 'x',
+    UPSTREAM_MICROSOFT_COMMON_ALLOWED_TENANTS: '11111111-2222-3333-4444-555555555555',
+  });
+  assert.ok(!config.internalWarnings.some((w) => /nothing bounds the addresses/.test(w)));
+});
+
+test('an unknown Microsoft tenant is refused when ALLOWED_TENANTS is set', () => {
+  const upstream = {
+    provider: 'microsoft',
+    isCommon: true,
+    allowedTenants: ['11111111-2222-3333-4444-555555555555'],
+  };
+  const verify = PROVIDERS.microsoft.verifyClaims;
+
+  assert.throws(() => verify(upstream, { tid: '99999999-9999-9999-9999-999999999999' }), /does not accept/);
+  assert.doesNotThrow(() => verify(upstream, { tid: '11111111-2222-3333-4444-555555555555' }));
+  // A token with no tid at all cannot satisfy an allow-list either.
+  assert.throws(() => verify(upstream, {}), /does not accept/);
+});
+
+test('a common Microsoft upstream with no tenant list needs xms_edov', () => {
+  // Entra never sends email_verified, so xms_edov is the only claim that says
+  // the tenant proved it owns the domain in the address. See ADR 0019.
+  const upstream = { provider: 'microsoft', isCommon: true, allowedTenants: [] };
+  const verify = PROVIDERS.microsoft.verifyClaims;
+  const tid = '99999999-9999-9999-9999-999999999999';
+
+  assert.throws(() => verify(upstream, { tid }), /xms_edov/, 'an absent claim proves nothing');
+  assert.throws(() => verify(upstream, { tid, xms_edov: false }), /not in a domain the tenant has verified/);
+  assert.doesNotThrow(() => verify(upstream, { tid, xms_edov: true }));
+  // Entra has emitted the claim as a string as well as a boolean.
+  assert.doesNotThrow(() => verify(upstream, { tid, xms_edov: 'true' }));
+  assert.throws(() => verify(upstream, { tid, xms_edov: 'false' }), /not in a domain the tenant has verified/);
+});
+
+test('an unverified email domain is refused even from an allowed tenant', () => {
+  const tid = '11111111-2222-3333-4444-555555555555';
+  const upstream = { provider: 'microsoft', isCommon: true, allowedTenants: [tid] };
+  const verify = PROVIDERS.microsoft.verifyClaims;
+
+  assert.throws(() => verify(upstream, { tid, xms_edov: false }), /not in a domain the tenant has verified/);
+  // But an allowed tenant does not have to send the claim at all.
+  assert.doesNotThrow(() => verify(upstream, { tid }));
+});
+
+test('a domain-specific Microsoft upstream does not need xms_edov', () => {
+  // Its own CLIENT_ID domain is the bound, and the address is checked against
+  // it, so demanding an optional claim would only break working deployments.
+  const upstream = { provider: 'microsoft', isCommon: false, domain: 'acme.test', tenant: 'acme.test', allowedTenants: [] };
+  assert.doesNotThrow(() => PROVIDERS.microsoft.verifyClaims(upstream, { tid: 'acme.test' }));
 });
 
 test('an upstream token exchange failure falls back to an email code', async (t) => {

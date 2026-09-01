@@ -329,6 +329,7 @@ const UPSTREAM_FIELDS = [
   'LABEL',
   'PROMPT',
   'ACR_VALUES',
+  'ALLOWED_TENANTS',
   'ENABLED',
   'DISCOVERY',
   'MAIL_PROVIDER',
@@ -421,6 +422,13 @@ function readUpstreams(env, problems) {
       label: fields.LABEL,
       prompt: fields.PROMPT,
       acrValues: fields.ACR_VALUES ? fields.ACR_VALUES.split(/[,\s]+/).filter(Boolean) : undefined,
+      // Which tenants a `common` upstream will accept. A domain-specific
+      // upstream is already bounded by the domain in its CLIENT_ID; a common
+      // one is bounded by nothing at all unless this is set or the provider
+      // says the address is domain-verified. See docs/adr/0019.
+      allowedTenants: fields.ALLOWED_TENANTS
+        ? fields.ALLOWED_TENANTS.split(/[,\s]+/).filter(Boolean).map((t) => t.toLowerCase())
+        : [],
       useDiscovery: fields.DISCOVERY === undefined ? undefined : !['0', 'false', 'no', 'off'].includes(fields.DISCOVERY.toLowerCase()),
       // Which mail fingerprint this upstream answers to, for the DNS hint in
       // src/upstream/dns.js. Only needed for a provider SAG has no built-in
@@ -1115,6 +1123,27 @@ export function loadConfig(env = {}, opts = {}) {
     // them, and nothing that answers a request does.
     internalWarnings,
   };
+
+  // A `common` Microsoft upstream accepts any tenant Microsoft will federate,
+  // and a `sub` here is derived from the address alone, so an unbounded one
+  // lets any tenant administrator assert any address. Without ALLOWED_TENANTS
+  // the only remaining bound is the xms_edov claim, which has to be added to
+  // the app registration before Entra sends it. See ADR 0019.
+  for (const upstream of upstreams) {
+    if (upstream.allowedTenants.length && upstream.provider !== 'microsoft') {
+      internalWarnings.push(
+        'Upstream ' + upstream.id + ' sets ALLOWED_TENANTS, but only a Microsoft token carries the tid it is ' +
+          'checked against, so nothing is bounded by it here.',
+      );
+    }
+    if (upstream.provider !== 'microsoft' || !upstream.isCommon || upstream.allowedTenants.length) continue;
+    internalWarnings.push(
+      'Upstream ' + upstream.id + ' accepts any Microsoft tenant, and nothing bounds the addresses it may assert. ' +
+        'Set UPSTREAM_' + upstream.provider.toUpperCase() + '_' + upstream.slug.toUpperCase() + '_ALLOWED_TENANTS, or add ' +
+        'the xms_edov optional claim to the app registration; until one of the two is done, sign-ins through this ' +
+        'upstream are refused. See docs/adr/0019-a-common-upstream-must-bound-what-it-may-assert.md.',
+    );
+  }
 
   if (stateStore.backend === 'memory' && !devMode) {
     internalWarnings.push(

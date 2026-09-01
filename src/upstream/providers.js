@@ -31,10 +31,28 @@ export const PROVIDERS = {
       return p;
     },
     verifyClaims: (u, claims) => {
-      if (u.isCommon) return;
+      const tid = String(claims.tid || '').toLowerCase();
+      // The strongest bound available on a multi-tenant upstream, and the only
+      // one that is about who is asserting rather than what they asserted:
+      // `tid` is issued by Microsoft, not set in the directory. See ADR 0019.
+      if (u.allowedTenants?.length && !u.allowedTenants.includes(tid)) {
+        throw new Error('this Microsoft sign-in is from a tenant this upstream does not accept');
+      }
+      if (u.isCommon) {
+        const verified = emailDomainVerified(claims);
+        if (verified === false) {
+          throw new Error('Microsoft reports that this address is not in a domain the tenant has verified');
+        }
+        // With no tenant list and no domain of its own, xms_edov is the only
+        // thing standing between this upstream and any tenant administrator
+        // asserting any address.
+        if (!u.allowedTenants?.length && verified !== true) {
+          throw new Error('this Microsoft upstream accepts any tenant, so it needs the xms_edov claim to trust an address');
+        }
+        return;
+      }
       // A tenant-pinned upstream must not accept a guest from elsewhere.
-      const tid = claims.tid;
-      if (u.tenant && tid && u.tenant !== 'common' && u.tenant !== 'organizations' && tid !== u.tenant) {
+      if (u.tenant && tid && u.tenant !== 'common' && u.tenant !== 'organizations' && tid !== u.tenant.toLowerCase()) {
         throw new Error('this Microsoft sign-in is from a different tenant');
       }
     },
@@ -72,6 +90,20 @@ export const PROVIDERS = {
     verifyClaims: () => {},
   },
 };
+
+/**
+ * Whether Entra says the tenant has verified the domain of the `email` claim,
+ * or undefined when it did not say. `xms_edov` is an optional claim, so it is
+ * absent until the app registration asks for it, and Entra has emitted it both
+ * as a JSON boolean and as a string.
+ */
+function emailDomainVerified(claims) {
+  const raw = claims.xms_edov;
+  if (typeof raw === 'boolean') return raw;
+  if (raw === 'true' || raw === '1' || raw === 1) return true;
+  if (raw === 'false' || raw === '0' || raw === 0) return false;
+  return undefined;
+}
 
 function tenantFor(u) {
   // A domain-specific Microsoft upstream can address its tenant by domain,

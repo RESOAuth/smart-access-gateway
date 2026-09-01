@@ -70,20 +70,6 @@ Host-header ambiguity but gives up the current zero-configuration start.
 
 **Answer:**
 
-### Which upstream claims prove control of an address?
-
-SAG rejects `email_verified=false`, but accepts a missing flag and falls back
-from `email` to `preferred_username` or `upn`. This is needed by some Microsoft
-responses, but a login identifier is not necessarily a provider assertion that
-the mailbox is verified. SAG then emits `email_verified=true` to its clients.
-
-Should each provider have an explicit claim and verification policy - for
-example, a tenant-scoped Microsoft rule and a strict Google
-`email_verified=true` rule - rather than the shared missing-means-acceptable
-behaviour? Real-provider integration tests are needed before tightening it.
-
-**Answer:**
-
 ### What repository controls are enforced outside the tree?
 
 The public API does not reveal the effective branch rules. OpenSSF Scorecard

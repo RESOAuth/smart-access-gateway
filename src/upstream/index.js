@@ -249,7 +249,15 @@ export async function completeUpstream(ctx, upstream, { code, stateTx }) {
   });
   provider.verifyClaims(upstream, claims);
 
-  const email = normaliseEmail(claims.email || claims.preferred_username || claims.upn);
+  // `preferred_username` and `upn` are login identifiers, not assertions that
+  // the mailbox exists and belongs to this account. On a domain-specific
+  // upstream that distinction is academic, because the domain check below
+  // bounds whatever comes back to the organisation the upstream was
+  // configured for. On a `common` upstream nothing bounds it, so only a claim
+  // the provider offers as the address is accepted. See ADR 0019.
+  const email = normaliseEmail(
+    upstream.isCommon ? claims.email : claims.email || claims.preferred_username || claims.upn,
+  );
   if (!email) {
     throw new Error('the upstream did not return an email address for this account');
   }
@@ -259,7 +267,8 @@ export async function completeUpstream(ctx, upstream, { code, stateTx }) {
     throw new Error('the upstream reports this email address as unverified');
   }
   // A domain-specific upstream must not be able to assert an address outside
-  // the domain it was configured for.
+  // the domain it was configured for. A common upstream has no domain of its
+  // own; what bounds it is in the provider's verifyClaims. See ADR 0019.
   if (!upstream.isCommon) {
     const domain = domainOf(email);
     if (domain !== upstream.domain && !domain.endsWith('.' + upstream.domain)) {
