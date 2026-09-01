@@ -59,9 +59,15 @@ fully as this instance's own.
 | `SESSION_COOKIE_NAME` | `sag_session` in development, `__Host-sag_session` otherwise | Production prefixes a custom name too, and uses `Secure; Path=/` as the prefix requires |
 | `SESSION_TTL` | `43200` (12 hours) | Idle timeout |
 | `SESSION_MAX_LIFETIME` | `604800` (7 days) | Absolute lifetime, regardless of activity |
-| `PROMPT_NONE_SHARED_SESSION` | `true` | Whether `prompt=none` may be answered from the shared session when sessions are per relying party |
 | `PROMPT_CONSENT_MODE` | `continue` | `continue` shows "continue as ..." for `prompt=consent` and an omitted `prompt`; `off` ignores consent requests |
 | `LOGOUT_CONFIRM` | `auto` | `auto` asks when the session is shared, `always`, `never` |
+
+`prompt=none` follows `SESSION_SCOPE` with no separate setting. Under `shared`
+a session can answer silently for a relying party that never signed the person
+in itself; under `rp` it cannot, because the cookie a relying party's request
+reads is its own. There is no fallback from one to the other in either
+direction - see
+[ADR 0004](adr/0004-session-scope-and-sign-out-confirmation.md).
 
 ## Tokens and codes
 
