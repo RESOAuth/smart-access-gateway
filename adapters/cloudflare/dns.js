@@ -12,23 +12,30 @@
 // because the AWS signing path and the email senders need it too.
 
 import { Resolver } from 'node:dns/promises';
+import { isIpAddress } from '../../src/util/ip.js';
 
 // `lookup`, `lookupService`, and the generic `resolve` throw "Not implemented"
 // on Workers, so this maps each record type to its own resolveX function and
 // never reaches for them. That is the whole difference from the Node adapter,
 // which resolves A and AAAA through `lookup`.
+// Workers' node:dns returns the whole answer section, not just the records of
+// the type asked for, which Node itself does not do: resolve4 on a name behind
+// a CNAME answers ["resoauth.github.io.", "185.199.108.153", ...]. Handing that
+// straight to the core makes it decide the CNAME target is not a public address
+// and refuse the client, so each type keeps only the records it asked for -
+// exactly what the DNS-over-HTTPS path does with `answer.type`.
 const BY_TYPE = {
-  A: (resolver, name) => resolver.resolve4(name),
-  AAAA: (resolver, name) => resolver.resolve6(name),
+  A: async (resolver, name) => (await resolver.resolve4(name)).filter(isIpAddress),
+  AAAA: async (resolver, name) => (await resolver.resolve6(name)).filter(isIpAddress),
   MX: async (resolver, name) => {
     const records = await resolver.resolveMx(name);
-    return records.map((r) => r.priority + ' ' + r.exchange);
+    return records.filter((r) => r && typeof r.exchange === 'string').map((r) => r.priority + ' ' + r.exchange);
   },
   TXT: async (resolver, name) => {
     // node:dns hands back an array of chunks per record; the core expects one
     // string per record, joined the way SPF is meant to be read.
     const records = await resolver.resolveTxt(name);
-    return records.map((chunks) => chunks.join(''));
+    return records.filter(Array.isArray).map((chunks) => chunks.join(''));
   },
 };
 

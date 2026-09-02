@@ -468,6 +468,31 @@ test('the Worker resolver answers A and AAAA without lookup or resolve', async (
   assert.deepEqual(calls, ['resolve4 a.example.test', 'resolve6 a.example.test']);
 });
 
+// Workers' node:dns returns the whole answer section rather than only the
+// records asked for, which Node does not do. The CNAME target below is exactly
+// what a real lookup of a GitHub Pages hostname returns alongside the
+// addresses; left in, the core reads it as a non-public address and refuses the
+// client.
+test('the Worker resolver drops answers that are not of the type asked for', async () => {
+  const fake = {
+    resolve4: () => Promise.resolve(['resoauth.github.io.', '185.199.108.153', '185.199.109.153']),
+    resolve6: () => Promise.resolve(['resoauth.github.io.', '2606:50c0:8000::153']),
+  };
+  const resolver = createDnsResolver({ resolver: fake });
+  assert.deepEqual(await resolver.resolve('pages.example.test', 'A'), ['185.199.108.153', '185.199.109.153']);
+  assert.deepEqual(await resolver.resolve('pages.example.test', 'AAAA'), ['2606:50c0:8000::153']);
+});
+
+test('the same goes for MX and TXT, which get a stray record too', async () => {
+  const fake = {
+    resolveMx: () => Promise.resolve(['cname.example.test.', { priority: 10, exchange: 'mx.example.test' }]),
+    resolveTxt: () => Promise.resolve(['cname.example.test.', ['v=spf1 -all']]),
+  };
+  const resolver = createDnsResolver({ resolver: fake });
+  assert.deepEqual(await resolver.resolve('example.test', 'MX'), ['10 mx.example.test']);
+  assert.deepEqual(await resolver.resolve('example.test', 'TXT'), ['v=spf1 -all']);
+});
+
 // The textual shape has to match what the DNS-over-HTTPS path and the Node
 // adapter produce, or the provider hint reads different answers per platform.
 test('the Worker resolver renders MX and TXT the way the other paths do', async () => {
