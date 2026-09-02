@@ -628,12 +628,13 @@ function readPeerJwksUrls(env, devMode, internalWarnings) {
  * Every https (or, in development, http) origin among the statically
  * configured clients' own registered redirect URIs.
  *
- * A relying party already trusted that origin the moment its redirect URI was
- * registered, so treating it as CORS-trusted too costs nothing new: it is how
- * a public client's own page reads /token and /userinfo with fetch() without
- * an operator naming the same origin a second time. A client that exists only
- * in a store or as CIMD is not known at start-up, so its origin is not in
- * this set - CORS_ALLOWED_ORIGINS is how one of those is added explicitly.
+ * This only matters once an operator has narrowed the default by naming
+ * origins in CORS_ALLOWED_ORIGINS: a relying party already trusted its own
+ * origin the moment its redirect URI was registered, so narrowing to somebody
+ * else's origin should not quietly lock out the clients this deployment was
+ * configured with in the first place. A client that exists only in a store or
+ * as CIMD is not known at start-up, so it is not in this set and has to be
+ * named explicitly once the narrowing starts.
  */
 function corsOriginsFromClients(staticClients, devMode) {
   const origins = new Set();
@@ -656,11 +657,16 @@ function corsOriginsFromClients(staticClients, devMode) {
  * Neither endpoint relies on a cookie - a PKCE-bound code and a bearer token
  * authenticate the caller instead - so there is nothing here for a
  * third-party origin to ride on; only whether it may read the JSON back needs
- * a decision. That decision defaults to yes, for every origin a relying party
- * has already registered a redirect URI on, so a public client works with no
- * CORS configuration at all; CORS_ENABLED=false is the way to opt out
- * entirely, and CORS_ALLOWED_ORIGINS names more origins on top - "*" for
- * every one of them, the same as the discovery documents already allow.
+ * a decision. Naming nothing means every origin, the same as the discovery
+ * documents already allow: a browser client is the ordinary caller of these
+ * two routes, most of them arrive as CIMD or out of a client store rather
+ * than as start-up configuration, and so refusing by default produced a CORS
+ * error to debug rather than a threat averted.
+ *
+ * CORS_ENABLED=false is the way to opt out entirely. Naming origins in
+ * CORS_ALLOWED_ORIGINS narrows to those, plus every origin a static client
+ * already registered a redirect URI on; "*" among them is still every
+ * origin, said explicitly.
  *
  * A malformed or disallowed CORS_ALLOWED_ORIGINS entry is dropped rather than
  * refusing the whole deployment to start, the same tolerance readPeerJwksUrls
@@ -669,8 +675,13 @@ function corsOriginsFromClients(staticClients, devMode) {
 function readCorsOrigins(env, devMode, staticClients, internalWarnings) {
   if (!bool(env, 'CORS_ENABLED', true)) return [];
 
+  // Nothing named at all - not even an entry that turns out to be a typo - is
+  // the default, and the default is every origin.
+  const named = list(env, 'CORS_ALLOWED_ORIGINS');
+  if (named.length === 0) return ['*'];
+
   const origins = corsOriginsFromClients(staticClients, devMode);
-  for (const raw of list(env, 'CORS_ALLOWED_ORIGINS')) {
+  for (const raw of named) {
     if (raw === '*') {
       origins.add('*');
       continue;
@@ -947,7 +958,8 @@ export function loadConfig(env = {}, opts = {}) {
       // Off means /token and /userinfo carry no CORS headers at all: a
       // browser-based relying party can still redeem a code or read its
       // access token from its own server, it just cannot do it from
-      // JavaScript running on a page.
+      // JavaScript running on a page. This is the only way to say no, because
+      // an empty CORS_ALLOWED_ORIGINS means the default rather than nothing.
       enabled: bool(env, 'CORS_ENABLED', true),
       allowedOrigins: readCorsOrigins(env, devMode, staticClients, internalWarnings),
     },

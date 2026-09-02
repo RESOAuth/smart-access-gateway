@@ -1,8 +1,9 @@
 // CORS on /token and /userinfo: the two routes a browser-based relying party
-// calls directly with fetch(), rather than by navigating there. On by
-// default, for every origin a client has already registered a redirect URI
-// on, so a public client works with no CORS configuration at all. Everywhere
-// else stays exactly as uncooperative with cross-origin JavaScript as before.
+// calls directly with fetch(), rather than by navigating there. On for every
+// origin by default, so a public client works with no CORS configuration at
+// all; CORS_ALLOWED_ORIGINS narrows that and CORS_ENABLED=false removes it.
+// Everywhere else stays exactly as uncooperative with cross-origin JavaScript
+// as before.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -21,21 +22,33 @@ async function signIn(sag) {
 // Configuration parsing
 // ---------------------------------------------------------------------------
 
-test('CORS is on by default, but there is nothing to trust with no relying party registered', () => {
+test('CORS is on for every origin by default', () => {
   const config = loadConfig({ SAG_ISSUER: 'https://auth.example.com', SAG_SECRET: SECRET });
   assert.equal(config.cors.enabled, true);
-  assert.deepEqual(config.cors.allowedOrigins, []);
+  assert.deepEqual(config.cors.allowedOrigins, ['*']);
 });
 
-test("a static client's own registered redirect URI origin is trusted automatically", () => {
+test('registering a static client does not narrow the default to that client', () => {
+  const config = loadConfig({
+    SAG_ISSUER: 'https://auth.example.com',
+    SAG_SECRET: SECRET,
+    CLIENT_APP_ID: 'app-client',
+    CLIENT_APP_REDIRECT_URIS: APP_ORIGIN + '/callback',
+  });
+  assert.deepEqual(config.cors.allowedOrigins, ['*']);
+});
+
+test("a static client's own redirect URI origin survives a narrowing to somebody else", () => {
+  const OTHER = 'https://other.example.com';
   const config = loadConfig({
     SAG_ISSUER: 'https://auth.example.com',
     SAG_SECRET: SECRET,
     CLIENT_APP_ID: 'app-client',
     // Two redirect URIs on the same origin still trust that origin once.
     CLIENT_APP_REDIRECT_URIS: [APP_ORIGIN + '/callback', APP_ORIGIN + '/other-callback'].join(','),
+    CORS_ALLOWED_ORIGINS: OTHER,
   });
-  assert.deepEqual(config.cors.allowedOrigins, [APP_ORIGIN]);
+  assert.deepEqual(config.cors.allowedOrigins.sort(), [APP_ORIGIN, OTHER].sort());
 });
 
 test('CORS_ENABLED=false turns it off entirely, including auto-derived origins', () => {
@@ -48,18 +61,6 @@ test('CORS_ENABLED=false turns it off entirely, including auto-derived origins',
   });
   assert.equal(config.cors.enabled, false);
   assert.deepEqual(config.cors.allowedOrigins, []);
-});
-
-test('CORS_ALLOWED_ORIGINS adds to the auto-derived set, it does not replace it', () => {
-  const OTHER = 'https://other.example.com';
-  const config = loadConfig({
-    SAG_ISSUER: 'https://auth.example.com',
-    SAG_SECRET: SECRET,
-    CLIENT_APP_ID: 'app-client',
-    CLIENT_APP_REDIRECT_URIS: APP_ORIGIN + '/callback',
-    CORS_ALLOWED_ORIGINS: OTHER,
-  });
-  assert.deepEqual(config.cors.allowedOrigins.sort(), [APP_ORIGIN, OTHER].sort());
 });
 
 test('a malformed or path-carrying CORS_ALLOWED_ORIGINS entry is dropped, not fatal', () => {
@@ -111,11 +112,11 @@ test("a public client's own page gets CORS with no CORS_ALLOWED_ORIGINS set at a
     }).toString(),
   });
   assert.equal(res.status, 200);
-  assert.equal(res.headers.get('access-control-allow-origin'), SPA_ORIGIN);
+  assert.equal(res.headers.get('access-control-allow-origin'), '*');
 
   const preflight = await sag.raw('/token', { method: 'OPTIONS', headers: { origin: SPA_ORIGIN } });
   assert.equal(preflight.status, 204);
-  assert.equal(preflight.headers.get('access-control-allow-origin'), SPA_ORIGIN);
+  assert.equal(preflight.headers.get('access-control-allow-origin'), '*');
 });
 
 test('CORS_ENABLED=false overrides the auto-derived origin too', async () => {
@@ -140,12 +141,33 @@ test('CORS_ENABLED=false overrides the auto-derived origin too', async () => {
   assert.equal(res.headers.get('access-control-allow-origin'), null);
 });
 
-test('an origin nobody registered gets nothing back, even though CORS defaults to on', async () => {
+test('an origin nobody registered is allowed too, because the default is every origin', async () => {
+  // The case the default exists for: a CIMD client, or one out of a client
+  // store, whose origin was never in the start-up configuration to derive.
   const sag = createInstance();
   const flow = await signIn(sag);
   const res = await sag.raw('/token', {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded', origin: APP_ORIGIN },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: flow.authCode,
+      redirect_uri: DEV_REDIRECT,
+      client_id: DEV_CLIENT,
+      code_verifier: flow.verifier,
+    }).toString(),
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('access-control-allow-origin'), '*');
+  assert.equal(res.headers.get('vary'), null);
+});
+
+test('narrowing with CORS_ALLOWED_ORIGINS shuts an unnamed origin out again', async () => {
+  const sag = createInstance({ CORS_ALLOWED_ORIGINS: APP_ORIGIN });
+  const flow = await signIn(sag);
+  const res = await sag.raw('/token', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', origin: 'https://evil.example.com' },
     body: new URLSearchParams({
       grant_type: 'authorization_code',
       code: flow.authCode,
