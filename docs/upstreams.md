@@ -125,13 +125,23 @@ at all.
 
 The Node adapter hands the core the host's own resolver, so a container or a VM
 asks whatever resolver it is already configured to trust and no query leaves the
-deployment. Workers and Lambda have no resolver, so they use DNS-over-HTTPS -
+deployment. The Cloudflare adapter hands it `node:dns`, which the Workers
+runtime resolves itself. Lambda has no resolver, so it uses DNS-over-HTTPS -
 Cloudflare's by default, and `DNS_RESOLVER_URL` points it anywhere that speaks
 the same JSON. Answers are cached per instance for an hour.
 
-That does mean a Workers or Lambda deployment on the default tells a public DNS
-service which domains are signing in, and only when the chooser would otherwise
-have appeared. `SIGNIN_PROVIDER_HINT=off` if that is not a trade you want.
+On Workers the DNS-over-HTTPS fallback is not merely slower, it does not work:
+a Worker's own `fetch` to a public DNS-over-HTTPS endpoint does not come back,
+so a Worker without the platform resolver refuses every CIMD client with "Could
+not resolve the client metadata host". Setting `DNS_RESOLVER_URL` there
+overrides the resolver that does work.
+
+That does mean a Lambda deployment on the default tells a public DNS service
+which domains are signing in, and only when the chooser would otherwise have
+appeared. `SIGNIN_PROVIDER_HINT=off` if that is not a trade you want. On
+Workers the query goes to the runtime's own resolver instead, which is
+Cloudflare either way - it is their platform - but it is no longer a `fetch` to
+a third party.
 
 ## The safety property worth knowing
 

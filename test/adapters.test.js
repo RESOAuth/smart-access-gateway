@@ -2,7 +2,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import worker from '../adapters/cloudflare/worker.js';
+import worker, { envWithResolver } from '../adapters/cloudflare/worker.js';
+import { createDnsResolver } from '../adapters/cloudflare/dns.js';
 import hsm, { _resetCache } from '../adapters/cloudflare/hsm.js';
 import { handler, toLambdaResult } from '../adapters/lambda/handler.js';
 import { handleRequest } from '../src/index.js';
@@ -401,4 +402,85 @@ test('the Worker and the Lambda adapter produce the same discovery document', as
 
   assert.deepEqual(viaWorker, viaCore);
   assert.deepEqual(viaLambda, viaCore, 'every platform must describe the same deployment');
+});
+
+// ---------------------------------------------------------------------------
+// The Worker's platform DNS resolver
+// ---------------------------------------------------------------------------
+//
+// A Worker's own `fetch` to a public DNS-over-HTTPS endpoint does not come
+// back, so the core's fallback cannot work here and the adapter has to hand it
+// `node:dns` instead. Without that, every client whose id is a metadata
+// document URL is refused with "Could not resolve the client metadata host".
+
+test('the Worker hands the core a resolver under the binding name', () => {
+  const env = { SAG_ISSUER: ISSUER };
+  const bag = envWithResolver(env);
+
+  assert.equal(typeof bag.SAG_DNS?.resolve, 'function', 'the core looks for resolve(name, type)');
+  assert.equal(env.SAG_DNS, undefined, 'the bindings object Workers hands in must not be mutated');
+  assert.equal(bag.SAG_ISSUER, ISSUER, 'everything else must survive the wrapping');
+});
+
+// The request context caches against the identity of the bag it was given, so
+// a fresh copy per request would throw the config away on every request.
+test('the wrapped bag is stable across calls', () => {
+  const env = { SAG_ISSUER: ISSUER };
+  assert.equal(envWithResolver(env), envWithResolver(env));
+});
+
+test('a resolver binding an operator supplied wins', () => {
+  const own = { resolve: () => Promise.resolve([]) };
+  const bag = envWithResolver({ SAG_DNS: own });
+  assert.equal(bag.SAG_DNS, own);
+});
+
+test('an explicit DNS_RESOLVER_URL wins, because asking for it is a choice', () => {
+  const env = { DNS_RESOLVER_URL: 'https://dns.example.test/resolve' };
+  const bag = envWithResolver(env);
+  assert.equal(bag, env, 'the bag must be handed through untouched');
+  assert.equal(bag.SAG_DNS, undefined);
+});
+
+test('DNS_BINDING renames the binding the resolver is supplied under', () => {
+  const bag = envWithResolver({ DNS_BINDING: 'OUR_DNS' });
+  assert.equal(typeof bag.OUR_DNS?.resolve, 'function');
+  assert.equal(bag.SAG_DNS, undefined);
+});
+
+test('the Worker resolver refuses a record type it cannot answer', async () => {
+  await assert.rejects(() => createDnsResolver().resolve('example.test', 'SRV'), /unsupported record type SRV/);
+});
+
+// `lookup`, `lookupService`, and the generic `resolve` throw "Not implemented"
+// on Workers, so the resolver must never reach for them.
+test('the Worker resolver answers A and AAAA without lookup or resolve', async () => {
+  const calls = [];
+  const fake = {
+    resolve4: (n) => (calls.push('resolve4 ' + n), Promise.resolve(['192.0.2.1'])),
+    resolve6: (n) => (calls.push('resolve6 ' + n), Promise.resolve(['2001:db8::1'])),
+    resolve: () => Promise.reject(new Error('Not implemented')),
+    lookup: () => Promise.reject(new Error('Not implemented')),
+  };
+  const resolver = createDnsResolver({ resolver: fake });
+  assert.deepEqual(await resolver.resolve('a.example.test', 'A'), ['192.0.2.1']);
+  assert.deepEqual(await resolver.resolve('a.example.test', 'AAAA'), ['2001:db8::1']);
+  assert.deepEqual(calls, ['resolve4 a.example.test', 'resolve6 a.example.test']);
+});
+
+// The textual shape has to match what the DNS-over-HTTPS path and the Node
+// adapter produce, or the provider hint reads different answers per platform.
+test('the Worker resolver renders MX and TXT the way the other paths do', async () => {
+  const fake = {
+    resolveMx: () => Promise.resolve([{ priority: 10, exchange: 'mx.example.test' }]),
+    resolveTxt: () => Promise.resolve([['v=spf1 ', 'include:_spf.example.test -all']]),
+  };
+  const resolver = createDnsResolver({ resolver: fake });
+  assert.deepEqual(await resolver.resolve('example.test', 'MX'), ['10 mx.example.test']);
+  assert.deepEqual(await resolver.resolve('example.test', 'TXT'), ['v=spf1 include:_spf.example.test -all']);
+});
+
+test('a hung lookup gives up rather than holding the invocation open', async () => {
+  const resolver = createDnsResolver({ timeoutMs: 5, resolver: { resolve4: () => new Promise(() => {}) } });
+  await assert.rejects(() => resolver.resolve('slow.example.test', 'A'), /timed out/);
 });
