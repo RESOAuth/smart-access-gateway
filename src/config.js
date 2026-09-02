@@ -1087,9 +1087,12 @@ export function loadConfig(env = {}, opts = {}) {
       // only when more than one upstream could take the address and the person
       // would otherwise be asked to choose. See docs/upstreams.md.
       hint: oneOf(env, 'SIGNIN_PROVIDER_HINT', ['off', 'order', 'select'], 'select'),
-      // DNS-over-HTTPS, because Workers and Lambda have no resolver of their
-      // own. The Node adapter supplies the platform resolver as a binding
-      // instead, so a local deployment asks nobody.
+      // DNS-over-HTTPS, for a runtime with no resolver of its own. Both the
+      // Node and the Cloudflare adapters supply a platform resolver as a
+      // binding instead - and on Workers they must, because a Worker's own
+      // `fetch` to a public DNS-over-HTTPS endpoint does not come back.
+      // Setting this explicitly is how an operator overrides that and picks
+      // the endpoint themselves.
       resolverUrl: str(env, 'DNS_RESOLVER_URL', 'https://cloudflare-dns.com/dns-query'),
       timeoutMs: int(env, 'DNS_TIMEOUT_MS', 1500, { min: 100, max: 10000 }),
       cacheTtlSeconds: int(env, 'DNS_CACHE_TTL', 3600, { min: 0, max: 86400 }),

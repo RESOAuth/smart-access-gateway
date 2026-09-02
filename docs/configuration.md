@@ -291,7 +291,7 @@ See [upstreams.md](upstreams.md).
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `SIGNIN_PROVIDER_HINT` | `select` | What to do when more than one upstream could take an address. `select` reads the domain's mail records and goes straight there; `order` shows the chooser with that option first; `off` never looks |
-| `DNS_RESOLVER_URL` | `https://cloudflare-dns.com/dns-query` | DNS-over-HTTPS, used only where the platform has no resolver. Workers and Lambda have none; the Node adapter supplies the host's own, and then no query leaves the deployment |
+| `DNS_RESOLVER_URL` | `https://cloudflare-dns.com/dns-query` | DNS-over-HTTPS, used only where the platform has no resolver. Lambda has none; the Node and Cloudflare adapters supply the platform's own, and on Node no query leaves the deployment. Setting this on Workers overrides the platform resolver, which is rarely what you want - a Worker's `fetch` to a DNS-over-HTTPS endpoint does not come back |
 | `DNS_BINDING` | `SAG_DNS` | Where an adapter puts a platform resolver |
 | `DNS_TIMEOUT_MS` | `1500` | A lookup that does not answer is simply not an answer |
 | `DNS_CACHE_TTL` | `3600` | Seconds an answer is cached, per instance. A domain that matched nothing is cached for five minutes |

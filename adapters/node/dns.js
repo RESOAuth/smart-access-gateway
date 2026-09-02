@@ -1,10 +1,14 @@
 // DNS lookups, using the platform resolver.
 //
-// The core falls back to DNS-over-HTTPS because Workers and Lambda have no
-// resolver of their own. Node does, so a container or a VM should use it: the
-// answers are the same, they come from whatever resolver the host is already
-// configured to trust, and the domain of every sign-in stays inside the
-// deployment rather than going to a public DNS service.
+// The core falls back to DNS-over-HTTPS when it is handed no resolver. Node has
+// one of its own, so a container or a VM should use it: the answers are the
+// same, they come from whatever resolver the host is already configured to
+// trust, and the domain of every sign-in stays inside the deployment rather
+// than going to a public DNS service.
+//
+// adapters/cloudflare/dns.js does the same for Workers, and cannot share this
+// file: `lookup` and the generic `resolve` are not implemented there, so A and
+// AAAA have to go through resolve4 and resolve6 instead.
 //
 // Same arrangement as the file-backed client store: node: modules stay on this
 // side of the line and the core is handed a binding.

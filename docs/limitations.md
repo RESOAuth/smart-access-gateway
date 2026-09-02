@@ -108,10 +108,11 @@ imminent.
 
 ## DNS-over-HTTPS tells a resolver which domains SAG is considering
 
-On Workers or Lambda there is no platform resolver, so guessing the upstream
-from a domain's mail records and checking a CIMD hostname's addresses use
+On Lambda there is no platform resolver, so guessing the upstream from a
+domain's mail records and checking a CIMD hostname's addresses use
 DNS-over-HTTPS - Cloudflare's by default. That service learns the domains being
-resolved. Node uses the host resolver instead.
+resolved. Node uses the host resolver, and Workers uses `node:dns`, which the
+runtime resolves itself.
 
 **Closed by** `DNS_RESOLVER_URL` pointing at a resolver you run,
 `SIGNIN_PROVIDER_HINT=off`, or deploying on Node, where the adapter hands the
