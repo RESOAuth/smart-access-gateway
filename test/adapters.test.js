@@ -2,7 +2,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import worker, { envWithResolver } from '../adapters/cloudflare/worker.js';
+import worker, { dnsTimeoutMs, envWithResolver } from '../adapters/cloudflare/worker.js';
 import { createDnsResolver } from '../adapters/cloudflare/dns.js';
 import hsm, { _resetCache } from '../adapters/cloudflare/hsm.js';
 import { handler, toLambdaResult } from '../adapters/lambda/handler.js';
@@ -441,6 +441,20 @@ test('an explicit DNS_RESOLVER_URL wins, because asking for it is a choice', () 
   const bag = envWithResolver(env);
   assert.equal(bag, env, 'the bag must be handed through untouched');
   assert.equal(bag.SAG_DNS, undefined);
+});
+
+// src/config.js clamps DNS_TIMEOUT_MS to [100, 10000]. The adapter reads the
+// variable before there is a config to ask, so it has to agree on its own -
+// and a typo like DNS_TIMEOUT_MS=1 giving every lookup a millisecond is a hard
+// failure to recognise from the outside.
+test('the resolver timeout is clamped the way the core clamps it', () => {
+  assert.equal(dnsTimeoutMs({}), 1500, 'unset is the default');
+  assert.equal(dnsTimeoutMs({ DNS_TIMEOUT_MS: '2500' }), 2500, 'a sane value is taken as given');
+  assert.equal(dnsTimeoutMs({ DNS_TIMEOUT_MS: '1' }), 100, 'below the floor is raised to it');
+  assert.equal(dnsTimeoutMs({ DNS_TIMEOUT_MS: '999999' }), 10000, 'above the ceiling is capped');
+  for (const bad of ['0', '-5', 'nonsense', '']) {
+    assert.equal(dnsTimeoutMs({ DNS_TIMEOUT_MS: bad }), 1500, 'DNS_TIMEOUT_MS=' + JSON.stringify(bad) + ' is the default');
+  }
 });
 
 test('DNS_BINDING renames the binding the resolver is supplied under', () => {

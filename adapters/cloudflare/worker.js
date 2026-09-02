@@ -24,6 +24,20 @@ export { StateGuard } from './state-do.js';
  */
 const wrapped = new WeakMap();
 
+// The same bounds src/config.js puts on DNS_TIMEOUT_MS, because the adapter
+// reads the variable before there is a config to ask. Without them a typo like
+// DNS_TIMEOUT_MS=1 gives every lookup a millisecond and DNS simply stops
+// working, which is a hard failure to recognise from the outside.
+const DNS_TIMEOUT_DEFAULT_MS = 1500;
+const DNS_TIMEOUT_MIN_MS = 100;
+const DNS_TIMEOUT_MAX_MS = 10000;
+
+export function dnsTimeoutMs(env) {
+  const value = Number(env.DNS_TIMEOUT_MS);
+  if (!Number.isFinite(value) || value <= 0) return DNS_TIMEOUT_DEFAULT_MS;
+  return Math.min(Math.max(value, DNS_TIMEOUT_MIN_MS), DNS_TIMEOUT_MAX_MS);
+}
+
 export function envWithResolver(env) {
   if (!env || typeof env !== 'object') return env;
   const cached = wrapped.get(env);
@@ -35,7 +49,7 @@ export function envWithResolver(env) {
   const bag =
     env[binding] || env.DNS_RESOLVER_URL
       ? env
-      : { ...env, [binding]: createDnsResolver({ timeoutMs: Number(env.DNS_TIMEOUT_MS) || 1500 }) };
+      : { ...env, [binding]: createDnsResolver({ timeoutMs: dnsTimeoutMs(env) }) };
 
   wrapped.set(env, bag);
   return bag;
