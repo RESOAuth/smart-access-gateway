@@ -106,26 +106,32 @@ attempt would walk straight past them.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `CORS_ENABLED` | `true` | Whether `/token` and `/userinfo` carry CORS headers at all |
-| `CORS_ALLOWED_ORIGINS` | - | Comma or space separated browser origins to trust *in addition to* every client's registered redirect URIs, or `*` for every origin |
+| `CORS_ALLOWED_ORIGINS` | `*` | Comma or space separated browser origins to narrow to, *in addition to* every static client's registered redirect URIs. Unset means every origin |
 
 Neither endpoint relies on the session cookie - a `/token` request is bound to
 its authorization code by PKCE, and `/userinfo` is bound to its caller by the
 bearer access token - so there is nothing here for a third-party origin to
-ride on. By default every origin among the statically configured clients' own
-`CLIENT_<SLUG>_REDIRECT_URIS` (`https`, or `http` in development) is trusted
-to read these two responses with `fetch()`: a public single-page application
-already registered that origin the moment its redirect URI was, so this is
-not a new decision, just not making the relying party's own JavaScript ask
-its backend to do what its backend never needed to do in the first place.
+ride on. Reading either response requires a code the caller cannot obtain
+without completing the flow, or a bearer token it already holds. The default
+is therefore every origin, the same as the discovery documents already allow:
+a browser-based relying party is the ordinary caller of these two routes, and
+refusing by default produced a CORS error to debug rather than a threat
+averted.
 
-A client that exists only in a client store or as a CIMD document is not
-known at start-up, so its origin is not covered automatically - name it with
-`CORS_ALLOWED_ORIGINS` instead. Set `CORS_ENABLED=false` to turn this off
-entirely, the same as leaving both variables unset used to mean: a relying
-party can still redeem a code or read a token from its own backend, just not
-from JavaScript running on a page. An explicit `CORS_ALLOWED_ORIGINS` entry
-must be exactly an origin - scheme, host and port, no path - and `https`
-outside development.
+Set `CORS_ALLOWED_ORIGINS` to narrow that to a named list. Every origin among
+the statically configured clients' own `CLIENT_<SLUG>_REDIRECT_URIS` (`https`,
+or `http` in development) stays trusted alongside it, so narrowing to one
+partner's origin does not lock out the clients this deployment was configured
+with. A client that exists only in a client store or as a CIMD document is not
+known at start-up, so once you narrow, its origin has to be named here too.
+Each entry must be exactly an origin - scheme, host and port, no path - and
+`https` outside development; `*` is accepted, and is the default said out
+loud.
+
+Set `CORS_ENABLED=false` to turn CORS off entirely. That is the only way to
+say no: an empty `CORS_ALLOWED_ORIGINS` means the default, not nothing. With
+it off, a relying party can still redeem a code or read a token from its own
+backend, just not from JavaScript running on a page.
 
 Every other route, including the hosted sign-in pages, never carries a CORS
 header at all: they are reached by navigation and depend on the session
