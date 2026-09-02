@@ -202,7 +202,24 @@ export async function fetchWithTimeout(url, init = {}, timeoutMs = 5000) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: ctrl.signal, redirect: 'error' });
+    // Not `redirect: 'error'`, which reads as the direct way to say "never
+    // follow one". Workers rejects that value outright - "won't be implemented
+    // since it does not make sense at the edge; use 'manual' and check the
+    // response status code" - and it rejects it when the call is made, so on
+    // Workers *every* outbound call through this helper failed rather than
+    // just the ones that met a redirect.
+    //
+    // So ask for the redirect to be handed back and refuse it here. Same
+    // guarantee, and it now holds on every runtime rather than only the ones
+    // that implement 'error'.
+    const res = await fetch(url, { ...init, signal: ctrl.signal, redirect: 'manual' });
+    // Nothing behind this helper wants to be redirected, and following one
+    // would let the host in a URL hand off to another - which for a client
+    // metadata document is the whole basis of its identity. 304 is in the 3xx
+    // range but is not a redirect.
+    const redirected = res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400 && res.status !== 304);
+    if (redirected) throw new Error('refusing to follow a redirect (HTTP ' + res.status + ')');
+    return res;
   } finally {
     clearTimeout(timer);
   }

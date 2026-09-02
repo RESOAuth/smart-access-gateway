@@ -7,6 +7,7 @@ import { createDnsResolver } from '../adapters/cloudflare/dns.js';
 import hsm, { _resetCache } from '../adapters/cloudflare/hsm.js';
 import { handler, toLambdaResult } from '../adapters/lambda/handler.js';
 import { handleRequest } from '../src/index.js';
+import { fetchWithTimeout } from '../src/util/http.js';
 import { resetContextCache } from '../src/context.js';
 import { publicPartOf, jwkThumbprint, verifyCompact, decodeJwt } from '../src/crypto/jose.js';
 import { pkce, authorizeUrl, extractField, DEV_CLIENT } from './harness.js';
@@ -508,4 +509,58 @@ test('the Worker resolver renders MX and TXT the way the other paths do', async 
 test('a hung lookup gives up rather than holding the invocation open', async () => {
   const resolver = createDnsResolver({ timeoutMs: 5, resolver: { resolve4: () => new Promise(() => {}) } });
   await assert.rejects(() => resolver.resolve('slow.example.test', 'A'), /timed out/);
+});
+
+// ---------------------------------------------------------------------------
+// Outbound fetch, and the one option Workers will not take
+// ---------------------------------------------------------------------------
+//
+// Every outbound call in SAG goes through fetchWithTimeout, so an option the
+// runtime rejects is not a narrow bug: it takes upstream discovery, token
+// exchange, peer JWKS, the DynamoDB and S3 stores, KMS, sealed env, and every
+// email sender with it. The HSM is the exception, because a service binding
+// exposes fetch() and is called directly.
+
+// 204 and 304 must carry no body at all; Response rejects one outright.
+const NULL_BODY = new Set([101, 204, 205, 304]);
+
+/** Swap in a fetch that records its init and answers with `status`. */
+function stubFetch(t, status, extra = {}) {
+  const seen = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = (url, init) => {
+    seen.push({ url: String(url), init });
+    return Promise.resolve(new Response(NULL_BODY.has(status) ? null : 'body', { status, ...extra }));
+  };
+  t.after(() => {
+    globalThis.fetch = real;
+  });
+  return seen;
+}
+
+test('outbound fetches never ask for redirect: error, which Workers rejects', async (t) => {
+  const seen = stubFetch(t, 200);
+  await fetchWithTimeout('https://example.test/thing', { headers: { accept: 'application/json' } });
+
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].init.redirect, 'manual', "Workers takes 'manual', not 'error'");
+  assert.equal(seen[0].init.headers.accept, 'application/json', 'the caller\'s init must survive');
+  assert.ok(seen[0].init.signal, 'the timeout signal must still be attached');
+});
+
+test('a redirect is still refused, which is the point of not following one', async (t) => {
+  for (const status of [301, 302, 303, 307, 308]) {
+    stubFetch(t, status, { headers: { location: 'https://elsewhere.test/' } });
+    await assert.rejects(
+      () => fetchWithTimeout('https://example.test/thing'),
+      new RegExp('refusing to follow a redirect \\(HTTP ' + status + '\\)'),
+      'HTTP ' + status + ' must not be followed',
+    );
+  }
+});
+
+test('304 is in the 3xx range but is not a redirect', async (t) => {
+  stubFetch(t, 304);
+  const res = await fetchWithTimeout('https://example.test/thing');
+  assert.equal(res.status, 304);
 });
