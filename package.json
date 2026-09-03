@@ -1,6 +1,6 @@
 {
   "name": "sag",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "description": "Smart Access Gateway - a stateless, deployable identity proxy (RESOAuth Ltd)",
   "homepage": "https://sag.resoauth.dev",
   "license": "AGPL-3.0",
