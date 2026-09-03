@@ -155,6 +155,28 @@ pairs are missing. There is no discovery mechanism here beyond that list:
 this is not "find other SAG instances on the network," it is "these specific,
 already-known instances of my own deployment."
 
+**Name each peer by its own per-instance hostname, never the central issuer
+hostname.** A peer URL on the issuer's own origin is refused at start-up, with
+the reason in the log, because it is the one form of this mistake that fails
+intermittently rather than outright: the fetch goes to whichever instance DNS
+or the traffic manager currently prefers, which may well be the instance doing
+the fetching, so the mesh federates on some requests and not others.
+
+### One peer fetch, one peer's keys
+
+The URL listed is a peer's `/.well-known/jwks.json`, which is that peer's
+*merged* document - so fetching it would be a request that itself fetches
+every one of that peer's peers, and in a complete mesh of instances that are
+all cold at once, which is exactly what a coordinated deployment produces,
+that fans out exponentially. SAG therefore asks a peer for its own keys only,
+by adding `?sag_peer_fetch=1` to the configured URL; `/jwks.json` answers a
+request carrying that parameter with this instance's own keys and nothing
+else. Nothing is lost, because the mesh has to be complete anyway - every
+instance already asks every other one directly - and a key is no longer
+trusted transitively through a peer that this instance never listed. The
+parameter is for instances of one deployment talking to each other; a relying
+party should always fetch the plain URL.
+
 **Listing a URL here is a trust decision, not a convenience.** Whatever keys
 a peer's JWKS returns become as fully trusted for this issuer as this
 instance's own signer set, because that is exactly what letting relying
@@ -166,12 +188,35 @@ ordinary, unmodified certificate check - the same trust `SAG_ISSUER` and
 "instances," not a new kind of risk.
 
 Some defensive handling happens regardless, because a peer is still an
-external HTTP response: a size cap (`PEER_JWKS_MAX_BYTES`) so a compromised or
-misbehaving peer cannot be used to exhaust memory, strict parsing that refuses
-anything that is not a `keys` array, and any entry carrying a private or
+external HTTP response: a size cap (`PEER_JWKS_MAX_BYTES`), enforced as the
+body arrives rather than after it has been read, so a compromised or
+misbehaving peer cannot be used to exhaust memory; strict parsing that refuses
+anything that is not a `keys` array; and any entry carrying a private or
 symmetric component (`d`, `k`) is dropped and logged rather than merged in -
 a peer that ever answered with that by mistake must not have the mistake
-amplified into every other instance's published JWKS.
+amplified into every other instance's published JWKS. An answer that leaves no
+usable key at all counts as a failed fetch rather than a successful empty one:
+an instance that cannot produce a signing key refuses to start, so a peer
+answering with no keys is reachable but not serving, and caching that would
+drop a live instance's keys for a whole `PEER_JWKS_CACHE_TTL` - and on a shared
+cache backend, hand that emptiness to every other instance too.
+
+### Publishing a JWKS that is missing a peer
+
+A peer can be unreachable with nothing cached for it - a cold instance whose
+first request is also its first peer fetch, and it failed. The document is then
+a subset of what this issuer is signing with somewhere, which is a different
+thing from being a few minutes out of date, so it is served with a `max-age`
+of `PEER_JWKS_RETRY_AFTER` (clamped to at most the usual five minutes) instead
+of the full interval. Pinning an incomplete key set in a relying party's or a
+CDN's cache for five minutes is what turns a few seconds of one instance being
+unreachable into minutes of tokens failing to verify, with the recovery
+invisible until the cache lapses; there is also no point offering a longer
+cache than the interval before this instance will even retry the peer.
+
+A burst of requests arriving on a cold instance shares one fetch per peer
+rather than each opening its own, which matters most on Workers, where every
+one of them would otherwise count against the subrequest limit.
 
 ### The cache, and why the grace period is generous
 
@@ -211,13 +256,31 @@ the next attempt rather than waiting the interval out.
 
 ### Where the cache lives
 
-`PEER_JWKS_CACHE_BACKEND` picks where a fetched entry is kept:
+`PEER_JWKS_CACHE_BACKEND` picks where a fetched entry is kept. It is a
+separate setting from `STATE_STORE_BACKEND` rather than sharing it, and
+deliberately so: the state store is three atomic primitives
+(`claim`, `has`, `increment`) guarding a security control, while this is a
+read-mostly blob cache, and the right platform primitive for each is a
+different one. On Cloudflare the state store has to be a Durable Object,
+which lives in exactly one place - fine for a token exchange, and the wrong
+shape for the one endpoint every relying party in the world fetches, which
+wants KV's read-mostly replication. Sharing a store would also put a JWKS
+fetch storm and the write that decides whether an authorisation code has been
+spent into the same throughput budget. Use both, pointed at whatever each
+platform does well:
 
 - **`memory`** (default). Works everywhere with no provisioning, and is
   exactly as durable as the `memory` state store backend: gone the moment the
   isolate or container recycles. Fine for trying this out; not durable enough
   to lean on the grace period for real, because the very restart that would
   make a peer's keys useful to remember is the one that empties this cache.
+  Worse than that on a real deployment: every cold isolate or container makes
+  its first `/jwks.json` a live fetch of every peer, and if that fetch fails
+  it publishes a key set with that peer missing. A peered deployment left on
+  `memory` is warned about it in the log once per isolate, alongside every
+  other absent defence, and `REQUIRE_PEER_JWKS_CACHE=true` turns that warning
+  into a refusal to start - as well as refusing to start if the peer list
+  itself has gone missing.
 - **`cf-kv`**. The right Cloudflare-native answer, and notably *not* the
   choice state store made: [state-and-limits.md](state-and-limits.md) refuses
   Cloudflare KV for single-use codes because it has no compare-and-set and is
@@ -241,14 +304,21 @@ stays as cheap as everything else `/healthz` reports:
   "backend": "dynamodb",
   "peers": [
     { "url": "https://aws-eu-west-2.auth.resoauth.cloud/.well-known/jwks.json",
-      "last_fetched_seconds_ago": 42, "within_cache_ttl": true, "within_grace_period": true }
+      "key_count": 1, "last_fetched_seconds_ago": 42,
+      "within_cache_ttl": true, "within_grace_period": true }
   ]
 }
 ```
 
 `within_grace_period: false` means that peer's keys have already dropped out
 of this instance's `/jwks.json` - worth alerting on, since it means that
-peer has been unreachable for a very long time by design.
+peer has been unreachable for a very long time by design. `key_count` is how
+many of the keys in `/jwks.json` came from that peer, which is the quickest
+way to answer "why is this key missing here": a `key_count` of `0`, or a
+`last_fetched_seconds_ago` of `null`, names the peer that is not contributing
+it. The `memory` backend reports per isolate or container, so on a fleet this
+is the answer for whichever instance answered the health check, not for the
+region.
 
 ## Health checks: `/alive` versus `/healthz`, and where Route 53 should point
 

@@ -605,7 +605,7 @@ function readStaticClients(env, problems) {
  * give one bad entry among several: a typo in one peer should cost this
  * instance that one peer's keys, not its ability to run at all.
  */
-function readPeerJwksUrls(env, devMode, internalWarnings) {
+function readPeerJwksUrls(env, devMode, issuerUrl, internalWarnings) {
   const urls = [];
   for (const raw of list(env, 'PEER_JWKS_URLS')) {
     let u;
@@ -617,6 +617,19 @@ function readPeerJwksUrls(env, devMode, internalWarnings) {
     }
     if (u.protocol !== 'https:' && !(u.protocol === 'http:' && devMode)) {
       internalWarnings.push('Ignoring PEER_JWKS_URLS entry "' + raw + '": must be an https URL outside development.');
+      continue;
+    }
+    // A peer named by the central issuer hostname rather than its own is an
+    // easy mistake to make and behaves worst of all: the fetch goes to
+    // whichever instance DNS or the traffic manager currently prefers, which
+    // may well be this one, so it sometimes federates a peer and sometimes
+    // fetches itself. Refused with an explanation rather than left to look
+    // like an intermittent fault - see docs/multi-region.md on per-instance
+    // hostnames.
+    if (u.origin === issuerUrl.origin) {
+      internalWarnings.push(
+        'Ignoring PEER_JWKS_URLS entry "' + raw + '": it is on this instance\'s own issuer origin, so it would fetch whichever instance answers there, including this one. Name each peer by its own per-instance hostname.',
+      );
       continue;
     }
     urls.push(u.href);
@@ -865,7 +878,7 @@ export function loadConfig(env = {}, opts = {}) {
   const configuredCookieName = str(env, 'SESSION_COOKIE_NAME', 'sag_session');
 
   const peerJwks = {
-    urls: readPeerJwksUrls(env, devMode, internalWarnings),
+    urls: readPeerJwksUrls(env, devMode, issuerUrl, internalWarnings),
     // How often to refresh a peer that is answering. Matches the cache
     // header already on /jwks.json: long enough to spare a fetch per
     // token verification, short enough that a genuine key rotation is
@@ -895,7 +908,23 @@ export function loadConfig(env = {}, opts = {}) {
     cacheTable: str(env, 'PEER_JWKS_CACHE_TABLE'),
     cacheRegion: str(env, 'PEER_JWKS_CACHE_REGION', str(env, 'AWS_REGION')),
     cacheEndpoint: awsEndpoint(env, 'DYNAMODB'),
+    // Turns the silent memory fallback into a startup error, the same shape as
+    // REQUIRE_STATE_STORE - see docs/adr/0007-require-prefix-for-fail-fast-flags.md.
+    // Worth having its own flag rather than being folded into that one: a
+    // deployment can perfectly reasonably run peered with no state store at
+    // all, and the two answer to different platform primitives anyway.
+    requireCache: bool(env, 'REQUIRE_PEER_JWKS_CACHE', false),
   };
+  if (peerJwks.requireCache && peerJwks.urls.length === 0) {
+    throw new ConfigError(
+      'REQUIRE_PEER_JWKS_CACHE is set but PEER_JWKS_URLS names no usable peer, so there is nothing to cache. Configure the peers, or unset REQUIRE_PEER_JWKS_CACHE.',
+    );
+  }
+  if (peerJwks.requireCache && peerJwks.cacheBackend === 'memory') {
+    throw new ConfigError(
+      'REQUIRE_PEER_JWKS_CACHE is set but PEER_JWKS_CACHE_BACKEND is "memory" (or unset), which does not survive an isolate or container recycling. Set cf-kv or dynamodb, or unset REQUIRE_PEER_JWKS_CACHE.',
+    );
+  }
 
   const config = {
     issuer,
@@ -1160,6 +1189,11 @@ export function loadConfig(env = {}, opts = {}) {
     );
   }
 
+  if (peerJwks.urls.length > 0 && peerJwks.cacheBackend === 'memory' && !devMode) {
+    internalWarnings.push(
+      'PEER_JWKS_CACHE_BACKEND is "memory", so a peer\'s keys are remembered only for as long as this isolate or container lives. Every cold start refetches every peer on the first /jwks.json, and one that fails then publishes a key set missing that peer - which is what PEER_JWKS_STALE_TTL exists to prevent. Set cf-kv on Cloudflare or dynamodb on AWS. See docs/multi-region.md.',
+    );
+  }
   if (stateStore.backend === 'memory' && !devMode) {
     internalWarnings.push(
       'The state store backend is "memory", which only prevents code and client assertion reuse within a single instance, records session revocations within that instance, and counts OTP sends per instance. Use cf-durable-object or dynamodb if more than one instance can serve a request.',

@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadConfig } from '../src/config.js';
-import { createPeerJwks, mergeJwks } from '../src/keys/peers.js';
+import { createPeerJwks, mergeJwks, PEER_FETCH_PARAM } from '../src/keys/peers.js';
 import { createInstance } from './harness.js';
 
 const DEV = 'http://localhost:8787';
@@ -29,6 +29,13 @@ const configWith = (overrides = {}) =>
     ...overrides,
   });
 
+/** The configured URL a peer fetch of `url` was for, without its marker. */
+function withoutPeerParam(url) {
+  const u = new URL(url);
+  u.searchParams.delete(PEER_FETCH_PARAM);
+  return u.href;
+}
+
 /** Answers fetch() by exact URL match; anything else fails loudly. */
 function fetchStub(script) {
   const calls = [];
@@ -36,8 +43,11 @@ function fetchStub(script) {
   globalThis.fetch = async (input) => {
     const url = typeof input === 'string' ? input : input.url;
     calls.push(url);
-    if (!(url in script)) throw new Error('unexpected fetch in this test: ' + url);
-    const answer = script[url];
+    // Scripts stay keyed on the configured peer URL; a peer fetch asks for the
+    // local-only document, so its marker is stripped before matching.
+    const asked = withoutPeerParam(url);
+    if (!(asked in script)) throw new Error('unexpected fetch in this test: ' + url);
+    const answer = script[asked];
     if (answer instanceof Error) throw answer;
     if (typeof answer === 'string') return new Response(answer, { status: 200, headers: { 'content-type': 'application/json' } });
     return new Response(JSON.stringify(answer), { status: 200, headers: { 'content-type': 'application/json' } });
@@ -68,6 +78,34 @@ test('a plain http peer URL is dropped outside development', () => {
 test('an http peer URL is fine in development', () => {
   const config = loadConfig({ SAG_ISSUER: DEV, SAG_SECRET: SECRET, PEER_JWKS_URLS: 'http://peer.localhost:8787/.well-known/jwks.json' });
   assert.equal(config.peerJwks.urls.length, 1);
+});
+
+test('a peer URL on this instance\'s own issuer origin is dropped', () => {
+  // The mistake this catches: naming the central hostname instead of the
+  // peer's own, which fetches whichever instance answers there - sometimes a
+  // peer, sometimes this instance - and so federates only intermittently.
+  const config = loadConfig({
+    SAG_ISSUER: 'https://auth.example.com',
+    SAG_SECRET: SECRET,
+    PEER_JWKS_URLS: ['https://auth.example.com/.well-known/jwks.json', PEER_A].join(','),
+  });
+  assert.deepEqual(config.peerJwks.urls, [PEER_A]);
+  assert.ok(config.internalWarnings.some((w) => /own issuer origin/.test(w)));
+});
+
+test('a peered deployment on the memory cache is warned about it', () => {
+  const config = loadConfig({ SAG_ISSUER: 'https://auth.example.com', SAG_SECRET: SECRET, PEER_JWKS_URLS: PEER_A });
+  assert.ok(config.internalWarnings.some((w) => /PEER_JWKS_CACHE_BACKEND is "memory"/.test(w)));
+});
+
+test('REQUIRE_PEER_JWKS_CACHE refuses the memory backend, and refuses no peers at all', () => {
+  const base = { SAG_ISSUER: 'https://auth.example.com', SAG_SECRET: SECRET, REQUIRE_PEER_JWKS_CACHE: 'true' };
+  assert.throws(() => loadConfig({ ...base, PEER_JWKS_URLS: PEER_A }), /PEER_JWKS_CACHE_BACKEND is "memory"/);
+  // The failure this catches is the peer list itself going missing - a
+  // template or a Terraform refactor dropping it looks exactly like a
+  // deliberate single-instance deployment otherwise.
+  assert.throws(() => loadConfig({ ...base, PEER_JWKS_CACHE_BACKEND: 'cf-kv' }), /names no usable peer/);
+  assert.doesNotThrow(() => loadConfig({ ...base, PEER_JWKS_URLS: PEER_A, PEER_JWKS_CACHE_BACKEND: 'cf-kv' }));
 });
 
 test('the stale grace period defaults to twice the session max lifetime', () => {
@@ -102,6 +140,45 @@ test('a healthy peer is fetched once and served from cache after that', async (t
   assert.deepEqual(await peer.keys(), [key('peer-1')]);
   assert.deepEqual(await peer.keys(), [key('peer-1')]);
   assert.equal(stub.calls.length, 1, 'the second call must be answered from cache, not a second fetch');
+});
+
+test('a peer is asked for its own keys only, not its view of the whole mesh', async (t) => {
+  // Otherwise fetching a peer fetches that peer's peers as well, which in a
+  // complete mesh of instances all cold at once fans out exponentially - and
+  // whichever request loses that race times out and publishes a JWKS with an
+  // instance's keys missing.
+  const stub = fetchStub({ [PEER_A]: { keys: [key('peer-1')] } });
+  t.after(stub.restore);
+
+  await createPeerJwks(configWith(), {}).keys();
+  assert.equal(new URL(stub.calls[0]).searchParams.get(PEER_FETCH_PARAM), '1');
+});
+
+test('one burst of requests to a cold instance makes one fetch per peer', async (t) => {
+  const stub = fetchStub({ [PEER_A]: { keys: [key('peer-1')] } });
+  t.after(stub.restore);
+  const peer = createPeerJwks(configWith(), {});
+
+  const answers = await Promise.all([peer.keys(), peer.keys(), peer.keys(), peer.keys()]);
+  for (const answer of answers) assert.deepEqual(answer, [key('peer-1')]);
+  assert.equal(stub.calls.length, 1, 'the requests that arrived during the fetch must share it');
+});
+
+test('a peer answering with an empty key set does not replace its cached keys', async (t) => {
+  // A reachable but not-yet-serving peer: a signing backend that has started
+  // failing, or an edge error page that happens to parse as JSON. Caching that
+  // as a success would drop a live instance's keys for a whole cache TTL, and
+  // on a shared cache backend would spread the emptiness to every instance.
+  const config = configWith({ PEER_JWKS_CACHE_TTL: '0' });
+  const peer = createPeerJwks(config, {});
+
+  const up = fetchStub({ [PEER_A]: { keys: [key('peer-1')] } });
+  assert.deepEqual(await peer.keys(), [key('peer-1')]);
+  up.restore();
+
+  const empty = fetchStub({ [PEER_A]: { keys: [] } });
+  t.after(empty.restore);
+  assert.deepEqual(await peer.keys(), [key('peer-1')], 'the last known keys stand instead');
 });
 
 test('a peer that goes down keeps serving its last known keys within the grace period', async (t) => {
@@ -216,7 +293,9 @@ test('describe reports cache state without ever fetching', async (t) => {
   const peer = createPeerJwks(configWith(), {});
 
   const before = await peer.describe();
-  assert.deepEqual(before, [{ url: PEER_A, last_fetched_seconds_ago: null, within_cache_ttl: false, within_grace_period: false }]);
+  assert.deepEqual(before, [
+    { url: PEER_A, key_count: 0, last_fetched_seconds_ago: null, within_cache_ttl: false, within_grace_period: false },
+  ]);
   assert.equal(stub.calls.length, 0, 'describe must never fetch, so /healthz stays cheap');
 });
 
@@ -272,7 +351,7 @@ test('the dynamodb cache backend round-trips a peer\'s keys', async (t) => {
   globalThis.fetch = async (input, init = {}) => {
     const url = typeof input === 'string' ? input : input.url;
     calls.push(url);
-    if (url === PEER_A) return new Response(JSON.stringify({ keys: [key('peer-1')] }), { status: 200 });
+    if (withoutPeerParam(url) === PEER_A) return new Response(JSON.stringify({ keys: [key('peer-1')] }), { status: 200 });
     const target = new Headers(init.headers).get('x-amz-target') || '';
     const body = JSON.parse(init.body);
     if (target.endsWith('GetItem')) return new Response(JSON.stringify({ Item: table.get(body.Key.peer_url.S) }), { status: 200 });
@@ -291,10 +370,10 @@ test('the dynamodb cache backend round-trips a peer\'s keys', async (t) => {
 
   assert.deepEqual(await peer.keys(), [key('peer-1')]);
   assert.equal(table.size, 1);
-  const afterFirstFetch = calls.filter((u) => u === PEER_A).length;
+  const afterFirstFetch = calls.filter((u) => withoutPeerParam(u) === PEER_A).length;
 
   assert.deepEqual(await peer.keys(), [key('peer-1')], 'served from DynamoDB, within the cache window');
-  assert.equal(calls.filter((u) => u === PEER_A).length, afterFirstFetch, 'no second peer fetch');
+  assert.equal(calls.filter((u) => withoutPeerParam(u) === PEER_A).length, afterFirstFetch, 'no second peer fetch');
 });
 
 test('dynamodb cache backend refuses to start without a table', () => {
@@ -315,6 +394,38 @@ test('GET /.well-known/jwks.json merges this instance\'s key with a peer\'s', as
   assert.equal(res.status, 200);
   assert.equal(body.keys.length, 2, 'this instance\'s own ephemeral key, plus the peer\'s');
   assert.ok(body.keys.some((k) => k.kid === 'peer-1'));
+});
+
+test('a peer fetching /.well-known/jwks.json gets this instance\'s own keys only', async (t) => {
+  const stub = fetchStub({}); // answering a peer must not fetch anything
+  t.after(stub.restore);
+
+  const sag = createInstance({ PEER_JWKS_URLS: PEER_A });
+  const { body } = await sag.json('/.well-known/jwks.json?' + PEER_FETCH_PARAM + '=1');
+  assert.equal(body.keys.length, 1, 'this instance\'s own ephemeral key, and nothing else');
+  assert.equal(stub.calls.length, 0);
+});
+
+test('a JWKS missing a peer\'s keys is only cacheable briefly', async (t) => {
+  const stub = fetchStub({ [PEER_A]: new Error('connect refused') });
+  t.after(stub.restore);
+
+  const sag = createInstance({ PEER_JWKS_URLS: PEER_A, PEER_JWKS_RETRY_AFTER: '30' });
+  const { res, body } = await sag.json('/.well-known/jwks.json');
+  assert.equal(body.keys.length, 1, 'only this instance\'s own key made it');
+  // Pinning an incomplete key set in a relying party's or a CDN's cache for
+  // the full five minutes is what turns a brief blip into minutes of tokens
+  // failing to verify.
+  assert.equal(res.headers.get('cache-control'), 'public, max-age=30');
+});
+
+test('a complete JWKS keeps the full cache lifetime', async (t) => {
+  const stub = fetchStub({ [PEER_A]: { keys: [key('peer-1')] } });
+  t.after(stub.restore);
+
+  const sag = createInstance({ PEER_JWKS_URLS: PEER_A });
+  const { res } = await sag.json('/.well-known/jwks.json');
+  assert.equal(res.headers.get('cache-control'), 'public, max-age=300');
 });
 
 test('/healthz reports peer configuration and freshness without fetching', async (t) => {

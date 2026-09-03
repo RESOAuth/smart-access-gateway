@@ -121,7 +121,8 @@ deliberately terse, because it is unauthenticated. What to look for:
 - `peer_jwks` - only present with `PEER_JWKS_URLS` set. A peer with
   `within_grace_period: false` has had its keys dropped from `/jwks.json`
   entirely, which means it has been unreachable for a very long time by
-  design - see [multi-region.md](multi-region.md).
+  design. `key_count: 0` on any peer is the answer to "why does `/jwks.json`
+  not list an instance's key" - see [multi-region.md](multi-region.md).
 
 ### What it deliberately will not tell you
 

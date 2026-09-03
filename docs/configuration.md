@@ -41,13 +41,14 @@ fully as this instance's own.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `PEER_JWKS_URLS` | - | The full JWKS URL of every other instance of this issuer. Empty means this feature is off and `/jwks.json` is exactly this instance's own keys |
+| `PEER_JWKS_URLS` | - | The full JWKS URL of every other instance of this issuer, each named by its own per-instance hostname rather than the issuer hostname. Empty means this feature is off and `/jwks.json` is exactly this instance's own keys |
 | `PEER_JWKS_CACHE_TTL` | `300` | Seconds before a healthy peer is refetched |
 | `PEER_JWKS_STALE_TTL` | Twice `SESSION_MAX_LIFETIME` | Seconds a peer's last known keys are still served, and still counted in `/jwks.json`, after it stops answering |
-| `PEER_JWKS_RETRY_AFTER` | `30` | Seconds to leave a peer alone after a failed fetch, so an unreachable one costs one timeout per interval rather than one per request. `0` retries on every request |
+| `PEER_JWKS_RETRY_AFTER` | `30` | Seconds to leave a peer alone after a failed fetch, so an unreachable one costs one timeout per interval rather than one per request. `0` retries on every request. Also how long a `/jwks.json` that is missing a peer's keys may be cached for |
 | `PEER_JWKS_TIMEOUT_MS` | `4000` | |
 | `PEER_JWKS_MAX_BYTES` | `65536` | A peer's response over this size is refused rather than parsed |
-| `PEER_JWKS_CACHE_BACKEND` | `memory` | `memory`, `cf-kv`, `dynamodb`. `memory` does not survive an isolate or container restart - see [multi-region.md](multi-region.md) |
+| `PEER_JWKS_CACHE_BACKEND` | `memory` | `memory`, `cf-kv`, `dynamodb`. `memory` does not survive an isolate or container restart, so a peered deployment should set one of the other two and is warned in the log if it does not - see [multi-region.md](multi-region.md) |
+| `REQUIRE_PEER_JWKS_CACHE` | `false` | Refuse to start unless peers are configured *and* `PEER_JWKS_CACHE_BACKEND` is durable, so a template or a Terraform refactor cannot drop either silently |
 | `PEER_JWKS_CACHE_KV_BINDING` | `SAG_PEER_JWKS` | With `cf-kv` |
 | `PEER_JWKS_CACHE_TABLE`, `PEER_JWKS_CACHE_REGION` | - | With `dynamodb` |
 
