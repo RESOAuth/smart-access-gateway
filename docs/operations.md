@@ -91,6 +91,29 @@ splits every account whose owner uses a plus tag.
   parties with a stale JWKS for as long as their cache lasts, which is the
   correct trade: a leaked signing key means anybody can mint an `id_token` for
   anybody.
+
+  **On a peered deployment, do not take the compromised instance offline.**
+  The instinct is to pull it, and it is the one action that keeps the leaked
+  key alive: an instance that stops answering has its last known keys served
+  by every peer for `PEER_JWKS_STALE_TTL` - two weeks by default - which is
+  exactly the grace period that exists so a brief outage does not invalidate
+  tokens that instance signed while healthy (see
+  [multi-region.md](multi-region.md)). It cannot tell an outage from a
+  compromise. Instead, rotate the key *on the instance itself and leave it
+  running*: every peer refetches within `PEER_JWKS_CACHE_TTL`, five minutes by
+  default, and a successful fetch replaces that peer's whole cached key set,
+  so the withdrawn key is gone from every instance's `/jwks.json` inside that
+  window.
+
+  If the instance genuinely cannot be left running - the host is compromised,
+  not just the key - then remove its URL from `PEER_JWKS_URLS` on every other
+  instance and deploy that. `/jwks.json` is built only from the peers named in
+  configuration, so the keys drop out as soon as each instance restarts,
+  without waiting for the grace period. Do this *before* stopping it, or in
+  the same change; the cached entry is orphaned rather than deleted, so put
+  the instance back in the peer list only once it is rebuilt with a new key.
+  Confirm with `/healthz` on each survivor, where the compromised peer should
+  no longer be listed at all.
 - **A client secret leaked.** Change that client's secret. Nothing else is
   affected, because a code is bound to its client.
 
@@ -121,7 +144,8 @@ deliberately terse, because it is unauthenticated. What to look for:
 - `peer_jwks` - only present with `PEER_JWKS_URLS` set. A peer with
   `within_grace_period: false` has had its keys dropped from `/jwks.json`
   entirely, which means it has been unreachable for a very long time by
-  design - see [multi-region.md](multi-region.md).
+  design. `key_count: 0` on any peer is the answer to "why does `/jwks.json`
+  not list an instance's key" - see [multi-region.md](multi-region.md).
 
 ### What it deliberately will not tell you
 

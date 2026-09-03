@@ -18,12 +18,12 @@
 // discovery document and then asks for something unreachable fails at the worst
 // possible moment, which is mid-sign-in.
 
-import { cachedJson } from '../util/http.js';
+import { cachedJson, json } from '../util/http.js';
 import { ACR } from '../acr.js';
 import { PRIVATE_KEY_JWT_ALGS } from '../oauth/clientauth.js';
 import { clientCapabilities } from '../clients/index.js';
 import { reachableProfileClaims } from '../profile.js';
-import { mergeJwks } from '../keys/peers.js';
+import { mergeJwks, isPeerFetch } from '../keys/peers.js';
 
 /** The claims every id_token from this deployment carries. */
 const CORE_CLAIMS = ['iss', 'sub', 'aud', 'exp', 'iat', 'auth_time', 'nonce', 'acr', 'amr', 'sid'];
@@ -208,15 +208,43 @@ export async function handleProtectedResourceMetadata(ctx) {
   return cachedJson(protectedResourceMetadata(ctx), 300);
 }
 
+// A short cache. Long enough to spare the HSM or KMS a call per token
+// verification, short enough that adding a key is picked up quickly.
+const JWKS_MAX_AGE = 300;
+
+/**
+ * How long a JWKS missing a configured peer's keys may be cached for.
+ *
+ * Much shorter, because such a document is wrong rather than merely old: it is
+ * a subset of the keys this issuer is signing with somewhere, so a relying
+ * party or a CDN that pins it for the full interval turns a few seconds of one
+ * instance being unreachable into minutes of tokens failing to verify - and
+ * the recovery is invisible until the cache lapses. Never shorter than this
+ * instance's own retry interval, since nothing here can change before then.
+ */
+function degradedJwksMaxAge(config) {
+  return Math.min(JWKS_MAX_AGE, Math.max(10, config.peerJwks.retryAfterSeconds));
+}
+
 export async function handleJwks(ctx) {
   const local = await ctx.signerSet.jwks();
+  // A peer asking gets this instance's own keys rather than its view of the
+  // whole mesh - see PEER_FETCH_PARAM for why. Served no-store: a peer keeps
+  // its own copy for PEER_JWKS_CACHE_TTL and needs no help from an
+  // intermediary, and a reduced key set held in a shared cache in front of
+  // this instance is only ever a way for a relying party to be handed one.
+  // The query string should keep the two documents apart on its own; this
+  // means a cache that has been configured to ignore it cannot get them
+  // confused either.
+  if (isPeerFetch(ctx.url)) return json({ keys: local.keys });
   // A deployment with no peers configured publishes exactly what it always
   // has: only its own keys. See docs/multi-region.md for what a peer is and
   // what listing one means.
-  const keys = ctx.peerJwks ? mergeJwks(local.keys, await ctx.peerJwks.keys({ log: ctx.log })) : local.keys;
-  // A short cache. Long enough to spare the HSM or KMS a call per token
-  // verification, short enough that adding a key is picked up quickly.
-  return cachedJson({ keys }, 300);
+  if (!ctx.peerJwks) return cachedJson({ keys: local.keys }, JWKS_MAX_AGE);
+
+  const { keys: peerKeys, incomplete } = await ctx.peerJwks.collect({ log: ctx.log });
+  const keys = mergeJwks(local.keys, peerKeys);
+  return cachedJson({ keys }, incomplete ? degradedJwksMaxAge(ctx.config) : JWKS_MAX_AGE);
 }
 
 /** Kept for callers that want the OpenID Connect document by its old name. */

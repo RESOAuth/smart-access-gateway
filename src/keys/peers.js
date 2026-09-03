@@ -20,9 +20,41 @@
 // letting relying parties treat every instance interchangeably requires.
 // Only ever list a deployment's own peers.
 
-import { fetchWithTimeout } from '../util/http.js';
+import { fetchWithTimeout, readTextLimited } from '../util/http.js';
 import { signRequest, credentialsFromEnv } from '../crypto/sigv4.js';
 import { nowSeconds } from '../util/bytes.js';
+
+/**
+ * The query parameter a peer fetch carries, which /jwks.json answers with this
+ * instance's own keys only.
+ *
+ * Peers are configured to point at each other's /.well-known/jwks.json, which
+ * is the *merged* document - so fetching a peer is itself a request that
+ * fetches every one of that peer's peers, and in a complete mesh of n
+ * instances all cold at once, which is what a coordinated deployment produces,
+ * that fans out exponentially. The requests that lose the race time out, and a
+ * timed-out peer publishes a JWKS missing an instance's keys. Asking for the
+ * local-only document makes one peer fetch cost exactly one peer's response.
+ *
+ * Nothing is lost by not being told a peer's peers: the mesh has to be complete
+ * anyway (docs/multi-region.md), so this instance already asks each of them
+ * itself, and it no longer trusts a key transitively via a peer that it did not
+ * list. A distinct query string also keeps the two documents apart in any cache
+ * in front of the peer, and a peer running an older release ignores the
+ * parameter and answers with the merged document, which is a superset.
+ */
+export const PEER_FETCH_PARAM = 'sag_peer_fetch';
+
+function peerFetchUrl(url) {
+  const u = new URL(url);
+  u.searchParams.set(PEER_FETCH_PARAM, '1');
+  return u.href;
+}
+
+/** True when this request is another instance of this issuer fetching keys. */
+export function isPeerFetch(url) {
+  return url.searchParams.get(PEER_FETCH_PARAM) === '1';
+}
 
 /**
  * Fetch and validate one peer's JWKS. Never trusted blindly: capped in size,
@@ -31,10 +63,11 @@ import { nowSeconds } from '../util/bytes.js';
  * have it amplified into every other instance's published JWKS.
  */
 async function fetchPeerJwks(url, { timeoutMs, maxBytes }, log) {
-  const res = await fetchWithTimeout(url, { headers: { accept: 'application/json' } }, timeoutMs);
+  const res = await fetchWithTimeout(peerFetchUrl(url), { headers: { accept: 'application/json' } }, timeoutMs);
   if (!res.ok) throw new Error('HTTP ' + res.status);
-  const raw = await res.text();
-  if (raw.length > maxBytes) throw new Error('response is ' + raw.length + ' bytes, over the ' + maxBytes + ' byte cap');
+  // Counted while the body streams in, rather than after res.text() has
+  // already allocated all of it - the reason readTextLimited exists.
+  const raw = await readTextLimited(res, maxBytes);
   let body;
   try {
     body = JSON.parse(raw);
@@ -56,6 +89,14 @@ async function fetchPeerJwks(url, { timeoutMs, maxBytes }, log) {
     }
     keys.push(key);
   }
+  // A healthy instance always publishes at least one key: createSignerSet
+  // refuses to start without a usable signer. So an empty answer is a peer
+  // that is reachable but not serving - a signing backend that has just
+  // started failing, an edge error page that happens to parse as JSON - and
+  // caching it as a success would swap known-good keys for nothing for a
+  // whole PEER_JWKS_CACHE_TTL, and on a shared cache backend would publish
+  // that emptiness to every other instance too.
+  if (keys.length === 0) throw new Error('response carried no usable public key');
   return keys;
 }
 
@@ -183,6 +224,13 @@ export function createPeerJwks(config, env) {
   // about whether it is reachable from another instance. Bounded by the
   // configured URL list, so there is nothing to evict.
   const retryAfter = new Map();
+  // One resolution in flight per peer, shared by every request that arrives
+  // while it runs. A cold isolate takes /jwks.json in bursts rather than one
+  // at a time - a deployment, or a fleet of relying parties whose own caches
+  // expired together - and without this each request would open its own
+  // connection to every peer and make its own cache read, which on Workers
+  // also counts against the subrequest limit.
+  const inFlight = new Map();
 
   return {
     backend: cacheBackend,
@@ -190,11 +238,24 @@ export function createPeerJwks(config, env) {
 
     /**
      * Merged public keys from every peer that is either reachable now or was
-     * reachable within its stale grace period.
+     * reachable within its stale grace period, and whether that is all of
+     * them.
      */
-    async keys({ log } = {}) {
+    async collect({ log } = {}) {
       const perPeer = await Promise.all(urls.map((url) => keysFor(url, log)));
-      return perPeer.flat();
+      return {
+        keys: perPeer.flatMap((peer) => peer.keys),
+        // A configured peer contributing nothing means the published JWKS is a
+        // subset of what this issuer is actually signing with, which is a
+        // different thing from merely being a few minutes old. What to do
+        // about it is the caller's decision - see handleJwks.
+        incomplete: perPeer.some((peer) => peer.keys.length === 0),
+      };
+    },
+
+    /** Just the merged keys, for a caller with nothing to do about a gap. */
+    async keys(opts) {
+      return (await this.collect(opts)).keys;
     },
 
     /** Cache state for one peer, without a network fetch. For /healthz. */
@@ -211,16 +272,34 @@ export function createPeerJwks(config, env) {
       return Promise.all(
         urls.map(async (url) => {
           const cached = await this.peek(url);
-          if (!cached) return { url, last_fetched_seconds_ago: null, within_cache_ttl: false, within_grace_period: false };
+          if (!cached) return { url, key_count: 0, last_fetched_seconds_ago: null, within_cache_ttl: false, within_grace_period: false };
           const age = now - cached.fetchedAt;
-          return { url, last_fetched_seconds_ago: age, within_cache_ttl: age < cacheTtlSeconds, within_grace_period: age < staleTtlSeconds };
+          return {
+            url,
+            // How many of the keys in /jwks.json came from this peer, so an
+            // operator asking why a key is missing can see which peer is the
+            // one not contributing it.
+            key_count: cached.keys.length,
+            last_fetched_seconds_ago: age,
+            within_cache_ttl: age < cacheTtlSeconds,
+            within_grace_period: age < staleTtlSeconds,
+          };
         }),
       );
     },
   };
 
+  /** One peer's keys, coalescing everything that asks while a fetch is open. */
+  function keysFor(url, log) {
+    const pending = inFlight.get(url);
+    if (pending) return pending;
+    const promise = resolveKeys(url, log).finally(() => inFlight.delete(url));
+    inFlight.set(url, promise);
+    return promise;
+  }
+
   /** One peer's keys: fresh from cache, freshly fetched, or stale-but-graced. */
-  async function keysFor(url, log) {
+  async function resolveKeys(url, log) {
     let cached;
     try {
       cached = await cache.get(url);
@@ -228,14 +307,14 @@ export function createPeerJwks(config, env) {
       log?.warn('peer jwks cache read failed', { url, error: err.message });
     }
     const now = nowSeconds();
-    if (cached && now - cached.fetchedAt < cacheTtlSeconds) return cached.keys;
+    if (cached && now - cached.fetchedAt < cacheTtlSeconds) return { url, keys: cached.keys };
 
     // A peer that has just failed is not tried again for a moment. Only
     // successes are cached, so without this a peer that has never answered -
     // a wrong URL, a region still coming up, an outage - costs a full
     // PEER_JWKS_TIMEOUT_MS on the request path of every /jwks.json, which is
     // the request every relying party makes to verify a token.
-    if (now < (retryAfter.get(url) ?? 0)) return graceKeys(cached, now);
+    if (now < (retryAfter.get(url) ?? 0)) return { url, keys: graceKeys(cached, now) };
 
     try {
       const keys = await fetchPeerJwks(url, { timeoutMs, maxBytes: maxDocumentBytes }, log);
@@ -248,15 +327,15 @@ export function createPeerJwks(config, env) {
       } catch (err) {
         log?.warn('peer jwks cache write failed', { url, error: err.message });
       }
-      return keys;
+      return { url, keys };
     } catch (err) {
       if (retryAfterSeconds > 0) retryAfter.set(url, now + retryAfterSeconds);
       if (cached && now - cached.fetchedAt < staleTtlSeconds) {
         log?.warn('peer unreachable, serving its last known keys', { url, ageSeconds: now - cached.fetchedAt, error: err.message });
-        return cached.keys;
+        return { url, keys: cached.keys };
       }
       log?.warn('peer unreachable and no usable cached keys remain', { url, error: err.message });
-      return [];
+      return { url, keys: [] };
     }
   }
 
