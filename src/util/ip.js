@@ -80,6 +80,16 @@ export function isPublicIpv6(value) {
     return isPublicIpv4([parts[6] >>> 8, parts[6] & 255, parts[7] >>> 8, parts[7] & 255].join('.'));
   }
 
+  // Transition mechanisms carry an IPv4 destination inside a nominally
+  // global IPv6 address. Preserve the embedded address's reachability rather
+  // than allowing one to tunnel a CIMD request into a private network.
+  if (parts[0] === 0x2002) {
+    return isPublicIpv4([parts[1] >>> 8, parts[1] & 255, parts[2] >>> 8, parts[2] & 255].join('.'));
+  }
+  if (parts[0] === 0x2001 && parts[1] === 0) {
+    return isPublicIpv4([255 - (parts[6] >>> 8), 255 - (parts[6] & 255), 255 - (parts[7] >>> 8), 255 - (parts[7] & 255)].join('.'));
+  }
+
   // Global unicast is 2000::/3. Documentation addresses are syntactically in
   // that range but deliberately not reachable on the public Internet.
   const global = (parts[0] & 0xe000) === 0x2000;

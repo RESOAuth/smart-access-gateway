@@ -131,12 +131,13 @@ export function continuePage(ctx, { tx, session, identity, clientName, clientLog
 
 /** Screen 4: signed out, or confirm signing out. */
 export function signedOutPage(ctx, { returnTo, returnLabel, legal }) {
+  const safeReturnTo = safeHttpUrl(returnTo, { allowHttp: ctx.config.devMode });
   const body = `
       <h1>You are signed out</h1>
       <p class="lede">Your sign-in session on this device has ended.</p>
       ${
-        returnTo
-          ? '<a class="button" href="' + e(returnTo) + '">Return to ' + e(returnLabel || 'the application') + '</a>'
+        safeReturnTo
+          ? '<a class="button" href="' + e(safeReturnTo) + '">Return to ' + e(returnLabel || 'the application') + '</a>'
           : ''
       }`;
   return layout(ctx, { title: 'Signed out', body, legal });
@@ -144,6 +145,7 @@ export function signedOutPage(ctx, { returnTo, returnLabel, legal }) {
 
 export function confirmLogoutPage(ctx, { token, email, identity, clientName, action, cancelUrl, shared, legal }) {
   const who = identity?.email ? identity : email ? { email } : undefined;
+  const safeCancelUrl = safeHttpUrl(cancelUrl, { allowHttp: ctx.config.devMode });
   const body = `
       <h1>Sign out?</h1>
       <p class="lede">${
@@ -158,7 +160,7 @@ export function confirmLogoutPage(ctx, { token, email, identity, clientName, act
         ${hiddenFields({ lt: token })}
         <button type="submit" data-busy-label="Signing out...">Sign out</button>
       </form>
-      ${cancelUrl ? '<div class="also"><a class="button secondary" href="' + e(cancelUrl) + '">Stay signed in</a></div>' : ''}`;
+      ${safeCancelUrl ? '<div class="also"><a class="button secondary" href="' + e(safeCancelUrl) + '">Stay signed in</a></div>' : ''}`;
   return layout(ctx, { title: 'Sign out', body, legal });
 }
 
