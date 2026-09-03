@@ -128,6 +128,22 @@ test('a relying party can override the instance default', async () => {
   assert.equal(res.headers.get('location'), 'http://127.0.0.1:8788/');
 });
 
+test('a custom-scheme logout URI is never rendered as a link on the issuer origin', async () => {
+  const sag = createInstance({
+    CLIENT_APP_ID: DEV_CLIENT,
+    CLIENT_APP_REDIRECT_URIS: DEV_REDIRECT,
+    CLIENT_APP_POST_LOGOUT_REDIRECT_URIS: 'javascript:alert(document.domain)',
+  });
+  await signInWithOtp(sag, { email: EMAIL });
+
+  const res = await sag.raw(
+    '/logout?client_id=' + DEV_CLIENT + '&post_logout_redirect_uri=' + encodeURIComponent('javascript:alert(document.domain)'),
+  );
+  const html = await res.text();
+  assert.match(html, /<h1>Sign out\?<\/h1>/);
+  assert.ok(!/javascript:/i.test(html), 'an escaped script URI still executes when used as an href');
+});
+
 test('an override cannot end more than the person was told about', async () => {
   // "never" skips the question; it does not widen what is cleared. A shared
   // session still only ends because the instance is configured for one.

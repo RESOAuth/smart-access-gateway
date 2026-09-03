@@ -567,6 +567,23 @@ test('CIMD refuses literal and DNS-resolved private addresses outside developmen
   assert.equal(literal.calls, 0, 'a hostname with a private answer is rejected before fetch');
 });
 
+test('CIMD refuses transition addresses that tunnel to private IPv4 destinations', async () => {
+  const privateTransitions = [
+    '2002:7f00:0001::',
+    '2001:0000:4136:e378:8000:63bf:3fff:fdd2',
+  ];
+
+  for (const address of privateTransitions) {
+    clearCimdCache();
+    const resolver = { resolve: async (_hostname, type) => (type === 'AAAA' ? [address] : []) };
+    await assert.rejects(
+      () => resolveClient(cimdConfig(), APP + '/client.json', { resolver }),
+      /public network address/,
+      address,
+    );
+  }
+});
+
 test('development CIMD may fetch localhost, but not an arbitrary private address', async (t) => {
   clearCimdCache();
   const localUrl = 'http://localhost/client.json';
