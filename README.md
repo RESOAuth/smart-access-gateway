@@ -119,6 +119,8 @@ which require a maintainer attestation.
 ```sh
 npm run check
 npm run lint
+npm run sast
+npm run fuzz
 npm test
 ```
 

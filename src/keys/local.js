@@ -11,6 +11,7 @@ import {
 } from '../crypto/jose.js';
 
 function generateParams(alg) {
+  // eslint-disable-next-line security/detect-object-injection -- lookup in fixed ALGS mapping
   const spec = ALGS[alg];
   if (!spec) throw new Error('unsupported signing algorithm: ' + alg);
   if (spec.family === 'post-quantum') return { name: spec.name };

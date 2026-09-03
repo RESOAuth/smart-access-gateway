@@ -14,6 +14,7 @@ export const ACR_STRENGTH = {
   [ACR.FEDERATED_MFA]: 3,
 };
 
+// eslint-disable-next-line security/detect-object-injection -- lookup in fixed ACR_STRENGTH mapping
 export const strengthOf = (acr) => ACR_STRENGTH[acr] ?? 0;
 
 /**

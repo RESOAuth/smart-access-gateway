@@ -30,6 +30,7 @@ async function loadKeys(env) {
   const keys = new Map();
 
   for (const alg of new Set(algs)) {
+    // eslint-disable-next-line security/detect-object-injection -- lookup in fixed ALGS algorithm dictionary
     if (!ALGS[alg]) throw new Error('unknown signing algorithm ' + alg);
     const suffix = alg.toUpperCase().replaceAll('-', '_');
     const raw = env['SIGNING_PRIVATE_JWK_' + suffix] || (alg === algs[0] ? env.SIGNING_PRIVATE_JWK : undefined);

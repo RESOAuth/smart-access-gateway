@@ -37,6 +37,7 @@ export async function createSignerSet(config, env) {
       // would mean a configured additional key was silently ignored and an
       // ephemeral one generated instead - so the JWKS would advertise a key
       // that changed on every restart.
+      // eslint-disable-next-line security/detect-object-injection -- alg is an element from configured algorithm list
       const perAlg = config.signing.keysByAlg?.[alg] ?? {};
       const signer = await createSigner(
         {
@@ -106,6 +107,7 @@ export async function createSignerSet(config, env) {
     describe() {
       return {
         primary: { alg: primaryAlg, backend: primary.backend, ephemeral: primary.ephemeral ?? false },
+        // eslint-disable-next-line security/detect-object-injection -- lookup in fixed ALGS mapping
         algorithms: [...signers.keys()].map((alg) => ({ alg, family: ALGS[alg].family })),
         post_quantum_signatures: this.postQuantumAlgs.length > 0,
         skipped,

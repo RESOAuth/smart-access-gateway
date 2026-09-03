@@ -118,6 +118,7 @@ export function createMemoryStore({ maxEntries = 10000 } = {}) {
  */
 export function createDurableObjectStore(config, env) {
   const name = config.stateStore.doBindingName;
+  // eslint-disable-next-line security/detect-object-injection -- binding name is configured by operator
   const binding = env?.[name];
   if (!binding || typeof binding.idFromName !== 'function') {
     throw new Error('The state store backend is cf-durable-object but no Durable Object namespace is bound as ' + name);

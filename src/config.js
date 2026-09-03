@@ -24,6 +24,7 @@ const isDevHostname = (hostname) =>
 // ---------------------------------------------------------------------------
 
 const str = (env, key, fallback) => {
+  // eslint-disable-next-line security/detect-object-injection -- key is a configuration environment variable name
   const v = env[key];
   return v === undefined || v === null || String(v).trim() === '' ? fallback : String(v).trim();
 };
@@ -236,12 +237,14 @@ function resolveIssuer(env, requestUrl) {
 function readSigning(env, devMode, problems) {
   const backend = oneOf(env, 'SIGNING_BACKEND', ['local', 'cloudflare-hsm', 'aws-kms'], 'local');
   const alg = str(env, 'SIGNING_ALG', 'ES256');
+  // eslint-disable-next-line security/detect-object-injection -- lookup in fixed ALGS mapping
   if (!ALGS[alg] || ALGS[alg].family === 'symmetric') {
     throw new ConfigError('SIGNING_ALG must be an asymmetric JWS algorithm, got "' + alg + '"');
   }
 
   const additionalAlgs = list(env, 'SIGNING_ADDITIONAL_ALGS').filter((a) => a !== alg);
   for (const a of additionalAlgs) {
+    // eslint-disable-next-line security/detect-object-injection -- lookup in fixed ALGS mapping
     if (!ALGS[a] || ALGS[a].family === 'symmetric') {
       throw new ConfigError('SIGNING_ADDITIONAL_ALGS contains an unusable algorithm: "' + a + '"');
     }
@@ -252,6 +255,7 @@ function readSigning(env, devMode, problems) {
   const keysByAlg = {};
   for (const a of [alg, ...additionalAlgs]) {
     const suffix = algEnvSuffix(a);
+    // eslint-disable-next-line security/detect-object-injection -- keyed by validated algorithm string
     keysByAlg[a] = {
       privateJwk: jsonValue(env, 'SIGNING_PRIVATE_JWK_' + suffix),
       privatePem: str(env, 'SIGNING_PRIVATE_KEY_PEM_' + suffix),
@@ -259,9 +263,13 @@ function readSigning(env, devMode, problems) {
     };
   }
   // Unsuffixed variables configure the primary algorithm.
+  // eslint-disable-next-line security/detect-object-injection -- keyed by validated primary algorithm string
   keysByAlg[alg] = {
+    // eslint-disable-next-line security/detect-object-injection -- keyed by validated primary algorithm string
     privateJwk: keysByAlg[alg].privateJwk ?? jsonValue(env, 'SIGNING_PRIVATE_JWK'),
+    // eslint-disable-next-line security/detect-object-injection -- keyed by validated primary algorithm string
     privatePem: keysByAlg[alg].privatePem ?? str(env, 'SIGNING_PRIVATE_KEY_PEM'),
+    // eslint-disable-next-line security/detect-object-injection -- keyed by validated primary algorithm string
     kmsKeyId: keysByAlg[alg].kmsKeyId ?? str(env, 'SIGNING_KMS_KEY_ID'),
   };
 
@@ -282,12 +290,15 @@ function readSigning(env, devMode, problems) {
     additionalAlgs,
     keysByAlg,
     requirePostQuantum,
+    // eslint-disable-next-line security/detect-object-injection -- keyed by validated primary algorithm string
     privateJwk: keysByAlg[alg].privateJwk,
+    // eslint-disable-next-line security/detect-object-injection -- keyed by validated primary algorithm string
     privatePem: keysByAlg[alg].privatePem,
     extraPublicJwks: jsonValue(env, 'SIGNING_PUBLIC_JWKS_EXTRA', []),
     hsmBindingName: str(env, 'HSM_BINDING', 'HSM'),
     hsmBinding: str(env, 'HSM_URL'),
     hsmSharedSecret: str(env, 'HSM_SHARED_SECRET'),
+    // eslint-disable-next-line security/detect-object-injection -- keyed by validated primary algorithm string
     kmsKeyId: keysByAlg[alg].kmsKeyId,
     kmsRegion: str(env, 'SIGNING_KMS_REGION', str(env, 'AWS_REGION')),
     kmsEndpoint: awsEndpoint(env, 'KMS'),
@@ -367,6 +378,7 @@ function readUpstreams(env, problems) {
     const slug = head.slice(underscore + 1);
     const id = provider + '/' + slug.toLowerCase();
     if (!grouped.has(id)) grouped.set(id, { id, provider, slug, fields: {} });
+    // eslint-disable-next-line security/detect-object-injection -- field is matched from UPSTREAM_FIELDS list
     grouped.get(id).fields[field] = str(env, key);
   }
 
@@ -535,6 +547,7 @@ function readStaticClients(env, problems) {
     const slug = rest.slice(0, rest.length - field.length).replace(/_$/, '');
     if (!slug) continue;
     if (!grouped.has(slug)) grouped.set(slug, {});
+    // eslint-disable-next-line security/detect-object-injection -- field is matched from CLIENT_FIELDS list
     grouped.get(slug)[field] = str(env, key);
   }
 

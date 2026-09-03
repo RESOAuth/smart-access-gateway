@@ -20,14 +20,14 @@ It is an aid to honest self-certification, not a badge claim by itself.
 | `release_notes` | [CHANGELOG](../CHANGELOG.md) and GitHub releases provide human-readable changes. The release process requires upgrade impact to be stated. |
 | `report_process`, `report_archive` | [CONTRIBUTING](../CONTRIBUTING.md) links the public bug form and searchable issue archive. |
 | `vulnerability_report_process`, `vulnerability_report_private` | [SECURITY](../SECURITY.md) links GitHub private vulnerability reporting and says what to include. |
-| `test`, `test_policy`, `tests_are_added` | `npm test` runs the public `node:test` suite. CONTRIBUTING requires tests for changed behaviour and major functionality; feature tests in `test/` and their commit history are evidence of use. |
+| `test`, `test_policy`, `tests_are_added` | `npm test` runs the public `node:test` suite, and Apache-2.0 Jazzer.js performs bounded coverage-guided fuzzing of security-sensitive parsers through `npm run fuzz`. CONTRIBUTING requires tests for changed behaviour and major functionality; feature and fuzz tests in `test/` and their commit history are evidence of use. |
 | `warnings`, `warnings_fixed` | `npm run check` performs syntax checks and `npm run lint` runs ESLint with zero warnings allowed. Both run for pull requests, `main`, and releases. |
 | `crypto_published`, `crypto_floss`, `crypto_working` | SAG uses published AES-256-GCM, HKDF-SHA-256, HMAC-SHA-256, SHA-2, ES256/384, RS256, PS256, and FIPS 204 ML-DSA algorithms. It uses runtime Web Crypto, AWS KMS, or the Cloudflare HSM adapter. No default depends on MD4, MD5, SHA-1, DES, RC4, or an unsuitable cipher mode. All functions can run locally using Node and OpenSSL, which are FLOSS. See `src/crypto/`, `src/keys/`, and [post-quantum signing](post-quantum.md). |
 | `crypto_keylength` | The default is P-256. The persistent key generator creates 3072-bit RSA keys, development generation uses at least 2048 bits, and configured RSA keys below 2048 bits are refused. AES and internal HMAC keys are derived at 256 bits from a 48-byte generated master secret. |
 | `crypto_random` | Keys, secrets, IVs, nonces, codes, and tokens use Web Crypto `generateKey` or `getRandomValues`. Production code contains no `Math.random` use. |
 | `delivery_mitm`, `delivery_unsigned` | Source, releases, and images are delivered through HTTPS GitHub and GHCR endpoints. The project does not retrieve a hash over plain HTTP as proof of a download. |
-| `static_analysis` | CodeQL analyses JavaScript and workflow code on every pull request and push to `main`, and weekly. [RELEASING](../RELEASING.md) requires a passing CodeQL result before release. |
-| `static_analysis_fixed`, `dynamic_analysis_fixed` | [SECURITY](../SECURITY.md) applies the same remediation policy to confirmed exploitable findings from static and dynamic analysis. |
+| `static_analysis` | The Apache-2.0 `eslint-plugin-security` analyses production JavaScript through `npm run sast` on every pull request, push to `main`, and release. CodeQL also analyses JavaScript and workflow code on pull requests, `main`, and weekly. [RELEASING](../RELEASING.md) requires both checks to pass before release. |
+| `static_analysis_fixed`, `dynamic_analysis_fixed` | Jazzer.js runs on every pull request, push to `main`, and release, with a longer run at release. [SECURITY](../SECURITY.md) applies the same remediation policy to confirmed exploitable findings from static and dynamic analysis. |
 
 ## Not applicable answers
 

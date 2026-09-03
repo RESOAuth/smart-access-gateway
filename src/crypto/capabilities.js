@@ -11,9 +11,11 @@ const probeCache = new Map();
 
 /** Probe one algorithm by generating a throwaway key pair. Result is cached. */
 export async function supportsAlg(alg) {
+  // eslint-disable-next-line security/detect-object-injection -- lookup in fixed ALGS mapping
   if (!ALGS[alg]) return false;
   if (probeCache.has(alg)) return probeCache.get(alg);
   const promise = (async () => {
+    // eslint-disable-next-line security/detect-object-injection -- lookup in fixed ALGS mapping
     const spec = ALGS[alg];
     if (spec.family === 'symmetric') return true;
     try {
@@ -54,6 +56,7 @@ export async function cryptoReport(candidates = ['ES256', 'ML-DSA-44', 'ML-DSA-6
   return {
     supported,
     unsupported,
+    // eslint-disable-next-line security/detect-object-injection -- lookup in fixed ALGS mapping
     postQuantumSignatures: supported.some((a) => ALGS[a].family === 'post-quantum'),
   };
 }

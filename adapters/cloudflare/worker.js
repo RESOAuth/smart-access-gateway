@@ -47,6 +47,7 @@ export function envWithResolver(env) {
   // A real binding wins, and so does an explicitly configured DNS-over-HTTPS
   // endpoint: an operator who set one asked for it.
   const bag =
+    // eslint-disable-next-line security/detect-object-injection -- binding name is configured by operator or defaults to SAG_DNS
     env[binding] || env.DNS_RESOLVER_URL
       ? env
       : { ...env, [binding]: createDnsResolver({ timeoutMs: dnsTimeoutMs(env) }) };

@@ -38,6 +38,7 @@ function checkedRemoteUrl(value, label, allowHttp) {
 function checkMetadata(upstream, metadata, allowHttp) {
   checkedRemoteUrl(metadata.issuer, 'upstream ' + upstream.id + ' issuer', allowHttp);
   for (const field of ['authorization_endpoint', 'token_endpoint', 'jwks_uri']) {
+    // eslint-disable-next-line security/detect-object-injection -- field is from fixed metadata field list
     metadata[field] = checkedRemoteUrl(metadata[field], 'upstream ' + upstream.id + ' ' + field, allowHttp);
   }
   return metadata;
@@ -90,6 +91,7 @@ export async function upstreamMetadata(upstream, { ttlSeconds = 3600, allowHttp 
   if (!res.ok) throw new Error('upstream discovery for ' + upstream.id + ' failed with HTTP ' + res.status);
   const metadata = await readJsonLimited(res, MAX_DISCOVERY_BYTES);
   for (const field of ['authorization_endpoint', 'token_endpoint', 'jwks_uri', 'issuer']) {
+    // eslint-disable-next-line security/detect-object-injection -- field is from fixed metadata field list
     if (!metadata[field]) throw new Error('upstream ' + upstream.id + ' discovery document has no ' + field);
   }
   // Explicit configuration still wins over a discovered value, so an operator

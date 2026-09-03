@@ -6,9 +6,12 @@ Releases use semantic versions and signed Git tags. The version in
 Before publishing a release:
 
 1. Confirm the commit is on `main` and its CI, CodeQL, and OpenSSF Scorecard
-   checks passed. CodeQL is the static analysis gate for production releases.
-2. Run `npm ci --ignore-scripts`, `npm run check`, `npm run lint`, and
-   `npm test` from a clean checkout. Lint must finish without warnings.
+   checks passed. The npm SAST check and CodeQL are the static analysis gates
+   for production releases.
+2. Run `npm ci --ignore-scripts`, `npm run check`, `npm run lint`,
+   `npm run sast`, `npm run fuzz:release`, and `npm test` from a clean checkout.
+   Lint and SAST must finish without warnings, and fuzzing must report no
+   finding or crash.
 3. Review open security advisories, Dependabot alerts, CodeQL results, and
    publicly reported defects. Do not release with a confirmed exploitable
    vulnerability of medium or higher severity left unaddressed.
@@ -19,5 +22,6 @@ Before publishing a release:
 5. Update both version files, commit the change, create a signed `vX.Y.Z` tag,
    and publish a GitHub release using that changelog entry as its notes.
 
-Publishing a GitHub release reruns syntax checks, zero-warning linting, and the
-automated test suite before building and pushing the versioned container image.
+Publishing a GitHub release reruns syntax checks, zero-warning linting and SAST,
+coverage-guided fuzzing, and the automated test suite before building and
+pushing the versioned container image.

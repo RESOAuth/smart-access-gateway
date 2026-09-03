@@ -138,6 +138,7 @@ const LEVELS = { debug: 10, info: 20, warn: 30, error: 40, silent: 100 };
 function makeLogger(config) {
   const threshold = LEVELS[config.logLevel] ?? LEVELS.info;
   const emit = (level, message, fields) => {
+    // eslint-disable-next-line security/detect-object-injection -- level is a known log level string
     if (LEVELS[level] < threshold) return;
     const line = { level, msg: message, ...fields };
     const text = config.devMode ? formatDev(level, message, fields) : JSON.stringify(line);

@@ -56,6 +56,7 @@ export function createDnsResolver({ timeoutMs = 1500, resolver: injected } = {})
      *   special case.
      */
     async resolve(name, type) {
+      // eslint-disable-next-line security/detect-object-injection -- lookup in fixed BY_TYPE record map
       const query = BY_TYPE[type];
       if (!query) throw new Error('unsupported record type ' + type);
       // Enforced here rather than through Resolver's own timeout option, which

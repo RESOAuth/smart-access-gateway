@@ -30,6 +30,7 @@ export function createFileClientStore(dir) {
       if (path !== root && !path.startsWith(root + sep)) return null;
       let text;
       try {
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- lexical traversal is rejected above; operator-managed symlinks are trusted
         text = await readFile(path, 'utf8');
       } catch (err) {
         if (err.code === 'ENOENT' || err.code === 'EISDIR') return null;
@@ -44,6 +45,7 @@ export function createFileClientStore(dir) {
     /** For the start-up report only: how many records are sitting there. */
     async list() {
       try {
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- root is the configured directory path
         return (await readdir(root)).filter((name) => name.endsWith('.json'));
       } catch {
         return [];

@@ -112,6 +112,7 @@ function tenantFor(u) {
 }
 
 export function providerFor(name) {
+  // eslint-disable-next-line security/detect-object-injection -- lookup in fixed PROVIDERS mapping with fallback
   return PROVIDERS[name] || PROVIDERS.oidc;
 }
 

@@ -109,6 +109,7 @@ export async function handler(event) {
 export async function toLambdaResult(response) {
   const headers = {};
   response.headers.forEach((value, key) => {
+    // eslint-disable-next-line security/detect-object-injection -- copying standard HTTP response header keys
     if (key.toLowerCase() !== 'set-cookie') headers[key] = value;
   });
   const cookies = typeof response.headers.getSetCookie === 'function' ? response.headers.getSetCookie() : [];

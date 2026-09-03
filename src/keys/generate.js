@@ -12,6 +12,7 @@ import { b64 } from '../util/bytes.js';
 export const randomSecret = () => b64(crypto.getRandomValues(new Uint8Array(48)));
 
 function generateParams(alg) {
+  // eslint-disable-next-line security/detect-object-injection -- lookup in fixed ALGS mapping
   const spec = ALGS[alg];
   if (!spec) throw new Error('unknown algorithm ' + alg);
   if (spec.family === 'post-quantum') return { name: spec.name };
@@ -39,6 +40,7 @@ export async function generateSigningKey(alg) {
     kid,
     privateJwk: { ...privateJwk, kid },
     publicJwk: publicPartOf({ ...privateJwk, kid }),
+    // eslint-disable-next-line security/detect-object-injection -- lookup in fixed ALGS mapping
     family: ALGS[alg].family,
   };
 }

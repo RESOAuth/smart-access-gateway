@@ -119,5 +119,6 @@ export function otpAllowed(config, email) {
 export function formatCodeForDisplay(code) {
   const s = String(code);
   const size = s.length % 3 === 0 ? 3 : 4;
-  return (s.match(new RegExp('.{1,' + size + '}', 'g')) || [s]).join(' ');
+  const regex = size === 3 ? /.{1,3}/g : /.{1,4}/g;
+  return (s.match(regex) || [s]).join(' ');
 }

@@ -38,6 +38,12 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Static analysis
+        run: npm run sast
+
+      - name: Coverage-guided fuzzing
+        run: npm run fuzz:release
+
       - name: Test
         run: npm test
 

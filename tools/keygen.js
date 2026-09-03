@@ -104,6 +104,7 @@ if (!secretOnly) {
 
 const out = flag('out', false);
 if (out && typeof out === 'string') {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- output file path passed via CLI --out flag
   writeFileSync(
     out,
     JSON.stringify({ generated: new Date().toISOString(), keys: results.map((r) => r.privateJwk) }, null, 2) + '\n',

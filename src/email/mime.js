@@ -37,6 +37,7 @@ export function quotedPrintable(input) {
     lineLength += chunk.length;
   };
   for (let i = 0; i < bytes.length; i++) {
+    // eslint-disable-next-line security/detect-object-injection -- integer index into Uint8Array
     const byte = bytes[i];
     if (byte === 0x0d && bytes[i + 1] === 0x0a) {
       // Encode trailing whitespace before the break.

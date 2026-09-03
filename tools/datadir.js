@@ -33,6 +33,7 @@ export function parseEnvFile(text) {
     if ((value.startsWith("'") && value.endsWith("'")) || (value.startsWith('"') && value.endsWith('"'))) {
       value = value.slice(1, -1);
     }
+    // eslint-disable-next-line security/detect-object-injection -- key is parsed from env file line
     out[key] = value;
   }
   return out;
@@ -64,7 +65,9 @@ export function formatEnvFile(values, header = []) {
 export async function ensureKeyMaterial(dir, { alg, backend, now = () => new Date() } = {}) {
   const secretsPath = join(dir, SECRETS_FILE);
   const settingsPath = join(dir, SETTINGS_FILE);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path within operator-configured data directory
   const settings = existsSync(settingsPath) ? parseEnvFile(readFileSync(settingsPath, 'utf8')) : {};
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path within operator-configured data directory
   const values = existsSync(secretsPath) ? parseEnvFile(readFileSync(secretsPath, 'utf8')) : {};
   const generated = [];
 
@@ -95,11 +98,13 @@ export async function ensureKeyMaterial(dir, { alg, backend, now = () => new Dat
 
   if (generated.length) {
     try {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- operator-configured data directory
       mkdirSync(dir, { recursive: true, mode: 0o700 });
       probeWritable(dir);
     } catch (cause) {
       throw new Error(explainUnwritable(dir, cause), { cause });
     }
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path within operator-configured data directory
     writeFileSync(
       secretsPath,
       formatEnvFile(values, [
@@ -114,6 +119,7 @@ export async function ensureKeyMaterial(dir, { alg, backend, now = () => new Dat
       ]),
       { mode: 0o600 },
     );
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path within operator-configured data directory
     chmodSync(secretsPath, 0o600);
   }
 
@@ -123,6 +129,7 @@ export async function ensureKeyMaterial(dir, { alg, backend, now = () => new Dat
 /** Fail before writing rather than half way through it. */
 function probeWritable(dir) {
   const probe = join(dir, '.sag-write-test');
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path within operator-configured data directory
   writeFileSync(probe, '');
   rmSync(probe, { force: true });
 }

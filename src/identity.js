@@ -72,10 +72,16 @@ export const domainOf = (email) => String(email || '').split('@')[1]?.toLowerCas
  * is whether the code we email actually arrives.
  */
 export function looksLikeEmail(email) {
-  if (!email || email.length > 254) return false;
-  if (!/^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test(email)) return false;
-  const domain = domainOf(email);
-  return Boolean(domain) && domain.length <= 253 && !domain.startsWith('-') && !domain.endsWith('-');
+  const text = String(email || '');
+  if (!text || text.length > 254) return false;
+  const parts = text.split('@');
+  if (parts.length !== 2) return false;
+  const [local, domain] = parts;
+  if (!local || /\s/.test(local)) return false;
+  if (!domain || domain.length > 253 || domain.startsWith('-') || domain.endsWith('-')) return false;
+  const labels = domain.split('.');
+  if (labels.length < 2 || labels.some((l) => !l || /[\s@]/.test(l))) return false;
+  return true;
 }
 
 /**

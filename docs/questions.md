@@ -147,6 +147,10 @@ parsers, a libFuzzer-compatible target for sealed/JWT inputs, or an OWASP ZAP
 baseline against the Node local stack? Pick controls the maintainers will keep
 green rather than adding badge-only workflows.
 
+**Answer:** Jazzer.js coverage-guided fuzzing exercises the authorisation,
+JWT, environment, identity, IP-address, and OTP parsers in pull requests and
+before releases. ESLint security analysis is the complementary static control.
+
 **Answer:**
 
 ### Who will enrol and maintain the project metadata and badges?

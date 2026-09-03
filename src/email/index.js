@@ -29,6 +29,7 @@ const LAZY = {
  */
 export async function createEmailSender(config, env = {}) {
   const name = config.email.provider;
+  // eslint-disable-next-line security/detect-object-injection -- lookup of configured email provider in fixed registries
   const factory = FACTORIES[name] ?? (LAZY[name] ? await LAZY[name]() : undefined);
   if (!factory) throw new Error('unknown EMAIL_PROVIDER: ' + name);
   return factory(config, env);

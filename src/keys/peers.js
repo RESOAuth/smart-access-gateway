@@ -124,6 +124,7 @@ function createMemoryCache() {
 
 function createKvCache(config, env) {
   const name = config.peerJwks.cacheKvBindingName;
+  // eslint-disable-next-line security/detect-object-injection -- binding name is configured by operator
   const binding = env?.[name];
   if (!binding || typeof binding.get !== 'function' || typeof binding.put !== 'function') {
     throw new Error('PEER_JWKS_CACHE_BACKEND is cf-kv but no KV namespace is bound as ' + name);

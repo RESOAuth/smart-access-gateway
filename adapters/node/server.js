@@ -52,6 +52,7 @@ async function toFetchRequest(req, origin) {
   const url = origin + req.url;
   const headers = new Headers();
   for (let i = 0; i < req.rawHeaders.length; i += 2) {
+    // eslint-disable-next-line security/detect-object-injection -- integer index into rawHeaders array
     headers.append(req.rawHeaders[i], req.rawHeaders[i + 1]);
   }
   let body;
@@ -88,6 +89,7 @@ const server = createServer(async (req, res) => {
 
     const headers = {};
     response.headers.forEach((value, key) => {
+      // eslint-disable-next-line security/detect-object-injection -- copying standard HTTP response header keys
       if (key.toLowerCase() !== 'set-cookie') headers[key] = value;
     });
     const cookies = collectCookies(response);

@@ -25,8 +25,9 @@ records and RFCs stay only in this repository.
 - Keep the change focused and explain its user-visible effect.
 - Add or update automated tests for changed behaviour. Major new functionality
   must have tests before it is merged.
-- Run `npm run check`, `npm run lint`, and `npm test` locally. There is no build
-  step for the core suite. CI must pass with no lint warnings before merge.
+- Run `npm run check`, `npm run lint`, `npm run sast`, `npm run fuzz`, and
+  `npm test` locally. There is no build step for the core suite. CI must pass
+  with no lint or static-analysis warnings before merge.
 - Put platform-independent behaviour in `src/`; keep adapters thin.
 - Document every new public environment variable.
 - Use British English, Oxford commas, and hyphens in prose and comments.

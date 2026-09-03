@@ -170,8 +170,11 @@ export async function mailProviderFor(ctx, domain) {
   if (!domain || ctx.config.dns.hint === 'off') return undefined;
   // A hostname, and nothing that could be read as anything else: this value
   // goes into a URL and, on the Node adapter, into a resolver call.
-  if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(domain)) return undefined;
   if (domain.length > 253) return undefined;
+  const labels = domain.split('.');
+  if (labels.length < 2 || !labels.every((l) => Boolean(l) && l.length <= 63 && /^[a-z0-9-]+$/.test(l) && !l.startsWith('-') && !l.endsWith('-'))) {
+    return undefined;
+  }
 
   const cached = cache.get(domain);
   if (cached && cached.expiresAt > nowSeconds()) return cached.result;
