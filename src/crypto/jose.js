@@ -20,11 +20,14 @@ export const ALGS = {
 };
 
 /** Algorithms whose security does not rest on factoring or discrete logs. */
+// eslint-disable-next-line security/detect-object-injection -- lookup in fixed ALGS mapping
 export const POST_QUANTUM_ALGS = Object.keys(ALGS).filter((a) => ALGS[a].family === 'post-quantum');
 
+// eslint-disable-next-line security/detect-object-injection -- lookup in fixed ALGS mapping
 export const isPostQuantum = (alg) => ALGS[alg]?.family === 'post-quantum';
 
 function algParams(alg) {
+  // eslint-disable-next-line security/detect-object-injection -- lookup in fixed ALGS mapping
   const spec = ALGS[alg];
   if (!spec) throw new Error('unsupported JWS algorithm: ' + alg);
   return spec;
@@ -54,9 +57,11 @@ function assertKeyStrength(jwk, alg) {
   }
   const modulus = unb64u(jwk.n);
   let first = 0;
+  // eslint-disable-next-line security/detect-object-injection -- integer index into modulus byte array
   while (first < modulus.length && modulus[first] === 0) first++;
   const bits = first === modulus.length
     ? 0
+    // eslint-disable-next-line security/detect-object-injection -- integer index into modulus byte array
     : (modulus.length - first - 1) * 8 + (32 - Math.clz32(modulus[first]));
   if (bits < 2048) throw new Error(alg + ' requires an RSA modulus of at least 2048 bits');
 }
@@ -76,6 +81,7 @@ export async function jwkThumbprint(jwk) {
 
 export function publicPartOf(jwk) {
   const pub = { kty: jwk.kty };
+  // eslint-disable-next-line security/detect-object-injection -- property name from fixed public key field list
   for (const f of ['crv', 'x', 'y', 'n', 'e', 'pub']) if (jwk[f] !== undefined) pub[f] = jwk[f];
   if (jwk.alg) pub.alg = jwk.alg;
   else if (jwk.kty === 'AKP') throw new Error('an AKP JWK must carry an alg member');
@@ -129,6 +135,7 @@ export function decodeJwt(token) {
 export async function verifyCompact(token, jwk, { algs } = {}) {
   const { header, payload, signature, input } = decodeJwt(token);
   const alg = header.alg;
+  // eslint-disable-next-line security/detect-object-injection -- lookup in fixed ALGS mapping
   if (!ALGS[alg]) throw new Error('unsupported alg ' + alg);
   if (algs && !algs.includes(alg)) throw new Error('alg ' + alg + ' not permitted here');
   const key = await importPublicJwk(jwk, alg);
@@ -177,6 +184,7 @@ export function validateClaims(payload, { issuer, audience, nonce, clockSkew = 6
 const COORD_BYTES = { 'P-256': 32, 'P-384': 48, 'P-521': 66 };
 
 export function derToRawEcdsa(der, curve = 'P-256') {
+  // eslint-disable-next-line security/detect-object-injection -- lookup in fixed COORD_BYTES mapping
   const size = COORD_BYTES[curve];
   if (!size) throw new Error('unknown curve ' + curve);
   let i = 0;

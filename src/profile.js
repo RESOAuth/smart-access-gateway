@@ -63,6 +63,7 @@ export function relayedClaims(config, claims = {}, upstreamAcr) {
   const out = {};
   for (const claim of PROFILE_CLAIMS) {
     if (!permitted(config, claim)) continue;
+    // eslint-disable-next-line security/detect-object-injection -- claim is from fixed PROFILE_CLAIMS list
     const value = claims[claim];
     if (typeof value !== 'string' || value === '') continue;
     // A picture is a URL a relying party will put in an <img>, so it has to be
@@ -74,8 +75,10 @@ export function relayedClaims(config, claims = {}, upstreamAcr) {
     // <img> and get a 404 from. A name is only text, so it is capped.
     if (value.length > 512) {
       if (claim === 'picture') continue;
+      // eslint-disable-next-line security/detect-object-injection -- claim is from fixed PROFILE_CLAIMS list
       out[claim] = value.slice(0, 512);
     } else {
+      // eslint-disable-next-line security/detect-object-injection -- claim is from fixed PROFILE_CLAIMS list
       out[claim] = value;
     }
   }
@@ -172,6 +175,7 @@ export function initialsAvatar({ name, email }) {
   const index = parseInt(assetVersion(String(email || '')), 36) % AVATAR_COLOURS.length;
   const svg =
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img">' +
+    // eslint-disable-next-line security/detect-object-injection -- index is bounded by AVATAR_COLOURS.length modulo
     '<rect width="96" height="96" rx="48" fill="' + AVATAR_COLOURS[index] + '"/>' +
     '<text x="48" y="48" fill="#fff" font-family="system-ui,sans-serif" font-size="38" font-weight="600" ' +
     'text-anchor="middle" dominant-baseline="central">' +
@@ -211,6 +215,7 @@ export function outboundClaims(config, held = {}) {
   const out = {};
   for (const claim of PROFILE_CLAIMS) {
     if (!permitted(config, claim)) continue;
+    // eslint-disable-next-line security/detect-object-injection -- claim is from fixed PROFILE_CLAIMS list
     if (held[claim] !== undefined) out[claim] = held[claim];
   }
   if (held.name_inferred && out.name !== undefined) out['urn:sag:name_inferred'] = true;

@@ -57,11 +57,13 @@ function matchSealed(value) {
 }
 
 function str(env, key) {
+  // eslint-disable-next-line security/detect-object-injection -- key is an environment variable name
   const v = env[key];
   return v === undefined || v === null || String(v).trim() === '' ? undefined : String(v).trim();
 }
 
 async function resolve(service, id, { region, credentials, endpoint, timeoutMs = 5000 }) {
+  // eslint-disable-next-line security/detect-object-injection -- service is matched from MARKERS table
   const { target, payload, extractValue } = SERVICES[service];
   const url = endpoint || 'https://' + service + '.' + region + '.amazonaws.com/';
   const body = JSON.stringify(payload(id));
@@ -101,6 +103,7 @@ export async function unsealEnv(env) {
   await Promise.all(
     sealed.map(async ({ key, value, match }) => {
       const endpoint = str(env, SERVICES[match.service].endpointEnv) || globalEndpoint;
+      // eslint-disable-next-line security/detect-object-injection -- key is from Object.entries(env)
       unsealed[key] = await resolve(match.service, value.slice(match.marker.length), { region, credentials, endpoint });
     }),
   );

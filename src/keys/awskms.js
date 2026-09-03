@@ -34,6 +34,7 @@ async function kms(target, payload, { region, credentials, timeoutMs = 5000, end
 }
 
 export async function createKmsSigner({ keyId, region, credentials, alg = 'ES256', endpoint, extraPublicJwks = [] }) {
+  // eslint-disable-next-line security/detect-object-injection -- lookup in fixed SIGNING_ALGORITHMS mapping
   const signingAlgorithm = SIGNING_ALGORITHMS[alg];
   if (!signingAlgorithm) throw new Error('KMS cannot sign with ' + alg);
   if (!keyId) throw new Error('KMS signer requires SIGNING_KMS_KEY_ID');
@@ -69,6 +70,7 @@ export async function createKmsSigner({ keyId, region, credentials, alg = 'ES256
         { region, credentials, endpoint },
       );
       const sig = unb64(out.Signature);
+      // eslint-disable-next-line security/detect-object-injection -- lookup in fixed CURVES mapping
       return CURVES[alg] ? derToRawEcdsa(sig, CURVES[alg]) : sig;
     },
     async publicJwks() {

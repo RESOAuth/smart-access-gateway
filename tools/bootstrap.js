@@ -38,6 +38,7 @@ if (Object.keys(settings).length) {
 }
 
 for (const [key, value] of Object.entries({ ...values, ...settings })) {
+  // eslint-disable-next-line security/detect-object-injection -- key is from generated/configured environment variable keys
   if (process.env[key] === undefined || process.env[key] === '') process.env[key] = value;
 }
 

@@ -13,6 +13,7 @@ export function b64u(input) {
   const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
   let out = '';
   for (let i = 0; i < bytes.length; i += 3) {
+    // eslint-disable-next-line security/detect-object-injection -- integer index into Uint8Array
     const b0 = bytes[i];
     const b1 = bytes[i + 1];
     const b2 = bytes[i + 2];
@@ -89,6 +90,7 @@ export function timingSafeEqual(a, b) {
   // Length is not secret in our uses, but keep the loop fixed-cost anyway.
   let diff = ba.length ^ bb.length;
   const n = Math.max(ba.length, bb.length);
+  // eslint-disable-next-line security/detect-object-injection -- integer index into Uint8Array
   for (let i = 0; i < n; i++) diff |= (ba[i] ?? 0) ^ (bb[i] ?? 0);
   return diff === 0;
 }
@@ -103,6 +105,7 @@ export function fromHex(hex) {
   const clean = hex.trim().toLowerCase();
   if (clean.length % 2 !== 0 || !/^[0-9a-f]*$/.test(clean)) throw new Error('invalid hex');
   const out = new Uint8Array(clean.length / 2);
+  // eslint-disable-next-line security/detect-object-injection -- integer index into Uint8Array
   for (let i = 0; i < out.length; i++) out[i] = parseInt(clean.substr(i * 2, 2), 16);
   return out;
 }

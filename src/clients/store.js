@@ -121,6 +121,7 @@ function withCache(loader, ttlSeconds) {
  */
 function createBoundStore(config, env) {
   const { backend, kvBindingName } = config.clients.store;
+  // eslint-disable-next-line security/detect-object-injection -- binding name is configured by operator
   const binding = env?.[kvBindingName];
   if (!binding || typeof binding.get !== 'function') {
     throw new Error(
