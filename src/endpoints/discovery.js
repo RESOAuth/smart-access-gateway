@@ -18,7 +18,7 @@
 // discovery document and then asks for something unreachable fails at the worst
 // possible moment, which is mid-sign-in.
 
-import { cachedJson } from '../util/http.js';
+import { cachedJson, json } from '../util/http.js';
 import { ACR } from '../acr.js';
 import { PRIVATE_KEY_JWT_ALGS } from '../oauth/clientauth.js';
 import { clientCapabilities } from '../clients/index.js';
@@ -228,11 +228,19 @@ function degradedJwksMaxAge(config) {
 
 export async function handleJwks(ctx) {
   const local = await ctx.signerSet.jwks();
+  // A peer asking gets this instance's own keys rather than its view of the
+  // whole mesh - see PEER_FETCH_PARAM for why. Served no-store: a peer keeps
+  // its own copy for PEER_JWKS_CACHE_TTL and needs no help from an
+  // intermediary, and a reduced key set held in a shared cache in front of
+  // this instance is only ever a way for a relying party to be handed one.
+  // The query string should keep the two documents apart on its own; this
+  // means a cache that has been configured to ignore it cannot get them
+  // confused either.
+  if (isPeerFetch(ctx.url)) return json({ keys: local.keys });
   // A deployment with no peers configured publishes exactly what it always
   // has: only its own keys. See docs/multi-region.md for what a peer is and
-  // what listing one means. A peer asking gets the same answer, rather than
-  // this instance's view of the whole mesh - see PEER_FETCH_PARAM for why.
-  if (!ctx.peerJwks || isPeerFetch(ctx.url)) return cachedJson({ keys: local.keys }, JWKS_MAX_AGE);
+  // what listing one means.
+  if (!ctx.peerJwks) return cachedJson({ keys: local.keys }, JWKS_MAX_AGE);
 
   const { keys: peerKeys, incomplete } = await ctx.peerJwks.collect({ log: ctx.log });
   const keys = mergeJwks(local.keys, peerKeys);

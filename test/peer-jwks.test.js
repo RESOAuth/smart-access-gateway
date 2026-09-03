@@ -401,9 +401,12 @@ test('a peer fetching /.well-known/jwks.json gets this instance\'s own keys only
   t.after(stub.restore);
 
   const sag = createInstance({ PEER_JWKS_URLS: PEER_A });
-  const { body } = await sag.json('/.well-known/jwks.json?' + PEER_FETCH_PARAM + '=1');
+  const { res, body } = await sag.json('/.well-known/jwks.json?' + PEER_FETCH_PARAM + '=1');
   assert.equal(body.keys.length, 1, 'this instance\'s own ephemeral key, and nothing else');
   assert.equal(stub.calls.length, 0);
+  // A reduced key set has no business sitting in a cache in front of this
+  // instance, where a relying party could be handed it.
+  assert.equal(res.headers.get('cache-control'), 'no-store');
 });
 
 test('a JWKS missing a peer\'s keys is only cacheable briefly', async (t) => {

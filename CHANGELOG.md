@@ -18,6 +18,9 @@ All notable changes to SAG are recorded here. Releases use semantic versions.
   explanation, rather than fetching whichever instance happens to answer there.
 - `/healthz` reports `peer_jwks.peers[].key_count`, so an operator can see
   which peer is not contributing a key.
+- The "signing key leaked" runbook now covers a peered deployment, where
+  taking the compromised instance offline is the one action that keeps its
+  leaked key published by every peer for the whole grace period.
 
 ### Added
 

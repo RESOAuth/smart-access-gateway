@@ -359,13 +359,5 @@ export function mergeJwks(localKeys, peerKeys) {
     seen.add(id);
     keys.push(key);
   }
-  // A healthy instance always publishes at least one key: createSignerSet
-  // refuses to start without a usable signer. So an empty answer is a peer
-  // that is reachable but not serving - a signing backend that has just
-  // started failing, an edge error page that happens to parse as JSON - and
-  // caching it as a success would swap known-good keys for nothing for a
-  // whole PEER_JWKS_CACHE_TTL, and on a shared cache backend would publish
-  // that emptiness to every other instance too.
-  if (keys.length === 0) throw new Error('response carried no usable public key');
   return keys;
 }
