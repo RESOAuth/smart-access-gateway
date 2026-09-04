@@ -127,9 +127,6 @@ async function decide(ctx, { tx, client, session }) {
     // The relying party wants the person to see which account is being used.
     return renderContinue(ctx, { tx: advance(tx, { stage: STAGE.CONTINUE }), session });
   }
-  if (usable) {
-    return complete(ctx, { tx, client, session, refreshCookie: true });
-  }
 
   // Interaction is needed. A login_hint, or the address from a session we
   // cannot reuse, saves the person retyping it.

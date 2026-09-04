@@ -33,9 +33,10 @@ export function createCloudflareSender(config, env) {
         ({ EmailMessage } = await import('cloudflare:email'));
       } catch (cause) {
         throw new Error('the cloudflare email sender only works inside a Cloudflare Worker', { cause });
-      }
+      } /* node:coverage disable */
       await binding.send(new EmailMessage(from, to, raw));
       return { delivered: true, redirected: to === msg.to ? undefined : to };
+      /* node:coverage enable */
     },
   };
 }

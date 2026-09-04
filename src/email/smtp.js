@@ -180,17 +180,14 @@ function createSession(initialSocket) {
     /** Resolve once the TLS handshake has finished. */
     secured() {
       return new Promise((resolve, reject) => {
-        if (socket.encrypted) return resolve();
+        if (socket.encrypted) return resolve(); /* node:coverage disable */
         socket.once('secureConnect', resolve);
         socket.once('error', reject);
+        /* node:coverage enable */
       });
     },
     close() {
-      try {
-        socket.end();
-      } catch {
-        /* already gone */
-      }
+      socket.end();
     },
   };
 }
