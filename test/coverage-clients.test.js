@@ -410,7 +410,7 @@ test('config: corsOriginsFromClients ignores malformed client redirect URI', () 
     CLIENT_APP_ID: 'app',
     CLIENT_APP_REDIRECT_URIS: 'not-a-valid-url,https://app.example.com/cb',
   });
-  assert.ok(config.cors.allowedOrigins.includes('https://app.example.com'));
+  assert.ok(config.cors.allowedOrigins.some((origin) => origin === 'https://app.example.com'));
 });
 
 test('config: loadConfig checks SAG_SECRET length, SESSION_MAX_LIFETIME and CUSTOM_CSS_REMOTE_URL outside dev', () => {

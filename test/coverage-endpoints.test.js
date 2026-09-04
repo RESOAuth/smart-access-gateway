@@ -713,7 +713,12 @@ test('ui/csp: contentSecurityPolicy handles invalid customCssRemoteUrl and clien
     CUSTOM_CSS_URL: 'http://[invalid-ipv6-address',
   }));
   const csp1 = contentSecurityPolicy(config, 'https://valid.example.com/logo.png');
-  assert.ok(csp1.includes('https://valid.example.com'));
+  const imgSrc1 = csp1
+    .split('; ')
+    .find((directive) => directive.startsWith('img-src '))
+    ?.slice('img-src '.length)
+    .split(' ');
+  assert.ok(imgSrc1?.some((source) => source === 'https://valid.example.com'));
 
   const csp2 = contentSecurityPolicy(config, 'http://[invalid-logo-url');
   assert.ok(!csp2.includes('invalid-logo-url'));
