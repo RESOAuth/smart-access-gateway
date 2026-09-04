@@ -1,5 +1,10 @@
 # SAG - Smart Access Gateway
 
+[![CI](https://github.com/RESOAuth/smart-access-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/RESOAuth/smart-access-gateway/actions/workflows/ci.yml)
+[![Line coverage](.github/coverage.svg)](package.json)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/RESOAuth/smart-access-gateway/badge)](https://scorecard.dev/viewer/?uri=github.com/RESOAuth/smart-access-gateway)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14268/badge)](https://www.bestpractices.dev/projects/14268)
+
 An identity proxy rather than an identity provider. SAG gives your application
 one OpenID Connect endpoint to talk to, and behind it uses whatever the person
 already has - a Microsoft or Google account, or a code emailed to them - so you

@@ -7,7 +7,7 @@ import security from "eslint-plugin-security";
 import { defineConfig, globalIgnores } from "eslint/config";
 
 export default defineConfig([
-  globalIgnores(["package-lock.json", "**/node_modules"]),
+  globalIgnores(["package-lock.json", "**/node_modules", "coverage"]),
   { files: ["**/*.{js,mjs,cjs}"], plugins: { js }, extends: ["js/recommended"], languageOptions: { globals: {...globals.browser, ...globals.node} } },
   { ...security.configs.recommended, files: ["src/**/*.js", "adapters/**/*.js", "tools/**/*.js"] },
   { files: ["**/*.json"], plugins: { json }, language: "json/json", extends: ["json/recommended"] },
