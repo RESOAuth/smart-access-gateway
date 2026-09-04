@@ -44,6 +44,20 @@ jobs:
 
       - name: Test
         run: npm test
+        if: matrix.node-version != '20'
+
+      # Node 20 predates --test-coverage-lines, so the floor leg runs the
+      # same suite without the coverage gate around it.
+      - name: Test
+        run: npm run test:plain
+        if: matrix.node-version == '20'
+
+      # npm test rewrites .github/coverage.svg. A change that moves coverage
+      # and leaves the badge behind is a badge that lies, so fail here rather
+      # than let the README quote a figure nothing measures any more.
+      - name: Coverage badge is current
+        run: git diff --exit-code -- .github/coverage.svg
+        if: matrix.node-version != '20'
 
   fuzz:
     name: Fuzz
