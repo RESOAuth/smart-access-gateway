@@ -23,7 +23,7 @@
     "fuzz": "jazzer test/fuzz/sag.fuzz.js --timeout=5000 -- -runs=10000 -max_len=4096",
     "fuzz:release": "jazzer test/fuzz/sag.fuzz.js --timeout=5000 -- -runs=100000 -max_len=4096",
     "test": "npm run test:coverage && npm run coverage:badge",
-    "test:coverage": "mkdir -p coverage && node --test --experimental-test-coverage --test-coverage-include='src/**/*.js' --test-coverage-lines=90 --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/lcov.info test/*.test.js",
+    "test:coverage": "mkdir -p coverage && node --test --experimental-test-coverage --test-coverage-include='src/**/*.js' --test-coverage-lines=100 --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/lcov.info test/*.test.js",
     "test:plain": "node --test test/*.test.js",
     "coverage:badge": "node tools/coverage-badge.js",
     "keygen": "node tools/keygen.js",
