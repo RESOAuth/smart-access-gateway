@@ -40,14 +40,14 @@
   "devDependencies": {
     "@eslint/css": "^1.4.0",
     "@eslint/js": "^10.0.1",
-    "@eslint/json": "^2.0.1",
+    "@eslint/json": "^2.1.0",
     "@eslint/markdown": "^8.0.3",
     "@jazzer.js/core": "^4.0.0",
     "eslint": "^10.9.1",
     "eslint-plugin-security": "^4.0.1",
     "fast-check": "^4.9.0",
-    "globals": "^17.11.0",
-    "wrangler": "^4.0.0"
+    "globals": "^17.12.0",
+    "wrangler": "^4.128.0"
   },
   "allowScripts": {
     "esbuild@0.28.1": true,
