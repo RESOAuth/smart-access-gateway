@@ -33,6 +33,7 @@ ongoing maintenance). An RFC is allowed to leave things open; an ADR is not.
 | [0009](0009-worked-deployment-on-a-real-hostname.md) | A worked deployment on a real hostname |
 | [0010](0010-siem-event-export.md) | Relaying authentication events to a SIEM, one destination per instance |
 | [0011](0011-lambda-snapstart.md) | Lambda SnapStart with preloaded configuration and restore-safe credentials |
+| [0012](0012-signed-releases.md) | Signed container and Lambda releases with verifiable provenance and OpenSSF evidence |
 
 Sign outbound requests to relying parties and upstreams was also on the
 backlog this replaced, but it already had a decision -
