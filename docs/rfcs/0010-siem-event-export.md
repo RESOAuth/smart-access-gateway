@@ -4,81 +4,91 @@ Status: Proposed
 
 ## Context
 
-An operator wants sign-in, sign-out and abuse-relevant events visible in
-their own security tooling, not only in SAG's own log stream. SAG already
-emits structured, one-line-per-event JSON logs for exactly this kind of
-thing - sign-in succeeded, an upstream error, an OTP sent, an OTP send
-refused by rate limit, an authorisation code issued, tokens issued, a
-session ended, a start-up configuration warning - see the `log.*` calls
-throughout `src/`. On most platforms an operator already wires the
-platform's log pipeline (CloudWatch, Cloudflare Logpush, whatever a plain
-`node` process writes to stdout) into a SIEM, and that is often enough. It
-falls short in two ways: a log line is whatever shape the code that wrote
-it happened to choose, with no shared vocabulary across deployments or
-versions, so a detection rule written against today's wording breaks
-quietly the next time that message changes; and it carries no signature,
-so once it leaves SAG's process it is only as trustworthy as every hop the
-log pipeline takes on the way to the SIEM.
+SAG emits structured security logs, but event fields are not a stable public
+contract. Operators need detections that survive message wording changes and,
+optionally, signed events delivered to one configured SIEM. Platform log
+forwarding already handles many deployments and remains a supported transport.
 
-CAEP (the Continuous Access Evaluation Profile, part of the OpenID Shared
-Signals Framework, SSF) solves a related but narrower problem: an identity
-provider telling one specific relying party that one specific subject's
-session or credential state changed, over a stream that relying party
-registered and can manage. That machinery - stream registration, per-
-subject delivery, poll or push chosen per receiver - is built for a
-multi-tenant fan-out SAG does not have here. A SIEM is not a relying
-party: it does not care about one subject's stream, and it wants
-everything a deployment sees, not a filtered slice of it. Building the
-full SSF stream-management API to serve one operator-configured
-destination would be solving a shape of problem SAG does not actually
-have.
+Unawaited network work is not reliable after a serverless response. Lambda can
+freeze the execution environment, and Cloudflare's `waitUntil` has a bounded
+lifetime. A discarded promise may produce neither delivery nor a failure log.
+See the [Lambda runtime lifecycle](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtime-environment.html)
+and [Worker execution context](https://developers.cloudflare.com/workers/runtime-apis/context/#waituntil).
 
 ## Proposal
 
-Borrow the one part of SSF/CAEP worth keeping - the Security Event Token
-(SET, RFC 8417: a signed JWT with a fixed event envelope and a
-URN-namespaced event type) - without the streaming and subscription
-protocol built around it. Emit a SET, signed by the same signer set that
-already signs `id_token`
-([ADR 0006](../adr/0006-algorithm-agile-signing.md)), for a fixed
-catalogue of security-relevant events: sign-in succeeded, sign-in failed
-(an upstream error or a refused code), an OTP sent, an OTP send refused by
-rate limit, an authorisation code issued, tokens issued, a session ended
-(scoped or global, mirroring
-[ADR 0004](../adr/0004-session-scope-and-sign-out-confirmation.md)), and a
-start-up configuration warning. Where an event maps directly onto a CAEP
-type - a session ending onto `session-revoked` - use CAEP's URN, so a SIEM
-already parsing CAEP from another vendor recognises it without a
-SAG-specific rule; where nothing in CAEP fits (an OTP send, a rate limit),
-define a SAG-specific event type in the same envelope shape rather than
-force a mismatch onto a CAEP type that does not really mean that.
+### Event contract
 
-Configure one export destination per running instance -
-`SIEM_WEBHOOK_URL`, plus which event types to include - not one per
-relying party. Delivery is push only: SAG POSTs each SET as it happens,
-signed as an outbound request the same way any other SAG-initiated call to
-a third party already is
-([ADR 0010](../adr/0010-signed-outbound-requests.md)), so the SIEM
-authenticates the request without a shared secret beyond SAG's own
-published keys. No stream registry, no subscription API, no per-subject
-authorisation to get wrong: one instance, one destination, every event
-above a configured severity.
+Define a versioned catalogue for sign-in success and failure, OTP send and
+send refusal, code issuance, token issuance, session ending, and configuration
+warnings. Each event has a stable type, timestamp, random event id, outcome,
+and an allow-list of bounded fields. Log this structured event before any
+export attempt. Changing prose must not change event identity or semantics.
+
+Exclude credentials, codes, assertions, raw tokens, raw addresses, and arbitrary
+upstream response bodies. Where correlation is needed, use a deployment-scoped
+pseudonymous identifier with documented retention. Do not turn public client
+metadata into trusted operator or severity fields.
+
+For direct delivery, wrap each event in a signed [Security Event Token, RFC
+8417](https://www.rfc-editor.org/rfc/rfc8417.html). Use `typ: secevent+jwt`,
+SAG's `iss`, an explicit receiver `aud`, `iat`, a unique `jti`, and an `events`
+object keyed by a documented SAG-controlled event URI. Keep the same event id
+in the log and SET. Publish payload schemas and representative synthetic
+fixtures, including session scope from [ADR
+0004](../adr/0004-session-scope-and-sign-out-confirmation.md).
+
+Use SAG event types initially. A familiar event name is insufficient to claim
+CAEP semantics: any later CAEP mapping must implement its subject and event
+contract completely. This proposal does not implement SSF stream registration,
+subscriptions, acknowledgement, or a session-revocation protocol.
+
+### Configuration and delivery
+
+Configure one `SIEM_WEBHOOK_URL`, explicit `SIEM_AUDIENCE`, and a bounded
+`SIEM_EVENT_TYPES` allow-list per deployment. The operator sets these values;
+client metadata and browser requests cannot choose a destination. Require
+HTTPS, normal certificate validation, bounded response bodies, no redirects,
+and an explicit egress policy. A private SIEM endpoint requires a deliberate
+operator-approved network destination, not arbitrary URL fetching.
+
+Sign using an explicitly selected algorithm from the existing signer set
+([ADR 0006](../adr/0006-algorithm-agile-signing.md)) that the receiver supports.
+Retain public verification keys for the documented event acceptance window.
+The receiver validates signature, issuer, audience, type, freshness, and event
+schema, and deduplicates by issuer and `jti`. Outbound request signatures follow
+[ADR 0010](../adr/0010-signed-outbound-requests.md); that signature alone does
+not guarantee the SIEM implements the event-verification contract.
+
+Direct export is best effort with a bounded awaited flush before returning the
+authentication response on every adapter. Start one total two-second deadline
+for the flush, including signing and delivery of the bounded event batch. Send
+each event at most once, cap concurrency, and stop or cancel work at the
+deadline. Export failure must not change the authentication result. This can
+add up to two seconds of response latency; it is an explicit tradeoff, not
+fire-and-forget work that is assumed to survive the response.
+
+Record a bounded local delivery outcome or timeout before returning. Runtime
+termination can still prevent that record, so platform logs and delivery
+metrics must not be presented as a lossless audit guarantee. Do not wait on
+one timeout per event or let an unavailable SIEM exhaust unbounded memory.
+
+There is no durable retry queue in this phase. Operators requiring retained
+retries use their platform's supported log-forwarding pipeline and its own
+retention and failure monitoring. The current replay store's claims and
+counters must not be presented as an export queue. Direct delivery failures
+remain visible through local outcomes and aggregate metrics where execution
+continues, but are not automatically redelivered.
 
 ## Cost
 
-Push-only and fire-and-forget from a stateless instance means an export
-that fails - the SIEM endpoint is down, DNS is broken, whatever the
-reason - has nowhere durable to retry from without the same optional
-state store the rest of SAG depends on for anything that outlives a
-single request
-([ADR 0001](../adr/0001-stateless-with-optional-state-store.md)); without
-it, a failed export is simply lost and logged as a warning, and that has
-to be an honest, visible limitation rather than a silent gap in an
-operator's audit trail. Every event now costs an outbound HTTP call on a
-path that is otherwise pure compute, so it must never be allowed to block
-or fail the request that triggered it - fire-and-forget, never
-fire-and-await. A fixed event catalogue is also an ongoing maintenance
-surface: every new security-relevant `log.*` call added to `src/` in
-future is a decision about whether it belongs in the export catalogue
-too, and nothing today would enforce that the two stay in step with each
-other.
+Stable schemas, signing and verification fixtures, bounded delivery, adapter
+lifecycle tests, configuration documentation, and an operator runbook. Direct
+export adds signing and network work to authentication latency and load.
+
+Acceptance requires tests for a slow or unavailable receiver, signing timeout,
+redirect refusal, malformed response, event bursts, and every adapter's
+response lifecycle. Verify the total deadline, unchanged authentication
+result, bounded queue and concurrency, redaction, receiver deduplication,
+audience and type rejection, and key rotation. Record actual delivery limits
+without claiming exactly-once or durable delivery.
