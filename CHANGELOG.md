@@ -4,6 +4,13 @@ All notable changes to SAG are recorded here. Releases use semantic versions.
 
 ## Unreleased
 
+### Added
+
+- Signed container and source releases, with a verified release manifest,
+  GitHub build provenance, and a deployment verifier. Protected signed tags
+  now start the release workflow; it publishes the GitHub release after
+  verification.
+
 ### Security
 
 None.
