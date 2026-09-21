@@ -19,6 +19,20 @@ today), **Proposal** (the shape it would take), **Cost** (what it takes to
 build, and what it costs once built - a new dependency, a new failure mode,
 ongoing maintenance). An RFC is allowed to leave things open; an ADR is not.
 
+Each RFC stands on its own: include the requirements needed to assess and
+implement it, without depending on another pending RFC. Reference accepted
+ADRs for existing decisions, and say explicitly which decisions the proposal
+would change. Link protocol specifications directly where they inform the
+proposal.
+
+SAG is pre-release. Proposals may invalidate sessions or in-flight requests and
+change client configuration. State any necessary deployment ordering, but do
+not add extended migration windows or legacy acceptance without a concrete need.
+
+Keep existing RFC numbers when adding proposals; allocate new numbers after
+the highest one in this index. Gaps left by accepted or rejected proposals
+are not reused. Numbers identify proposals, not implementation priority.
+
 ## Index
 
 | # | Proposal |
@@ -35,6 +49,15 @@ ongoing maintenance). An RFC is allowed to leave things open; an ADR is not.
 | [0011](0011-lambda-snapstart.md) | Lambda SnapStart with preloaded configuration and restore-safe credentials |
 | [0012](0012-signed-releases.md) | Signed container and Lambda releases with verifiable provenance and OpenSSF evidence |
 | [0013](0013-single-kid-withdrawal.md) | Withdrawing one signing key across a peered deployment without cache deletion |
+| [0014](0014-local-identity-pool.md) | A local user identity pool with passwords and MFA |
+| [0015](0015-production-replay-guarantees.md) | Production replay guarantees |
+| [0016](0016-trusted-authentication-assurance.md) | Trusted authentication assurance |
+| [0017](0017-client-trust-and-assertion-audiences.md) | Client trust and assertion audiences |
+| [0018](0018-pushed-authorisation-requests.md) | Pushed authorisation requests |
+| [0019](0019-back-channel-logout.md) | Back-channel logout |
+| [0020](0020-resource-and-scope-contract.md) | Resource and scope contract |
+| [0021](0021-upstream-claim-contracts.md) | Upstream claim contracts |
+| [0022](0022-device-authorisation.md) | Device authorisation |
 
 Sign outbound requests to relying parties and upstreams was also on the
 backlog this replaced, but it already had a decision -

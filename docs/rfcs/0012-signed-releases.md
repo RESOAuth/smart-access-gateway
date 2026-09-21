@@ -17,8 +17,9 @@ At repository commit `65cb2c0f2cbaf55a5284b3a461cbc3887d8799c1`:
   uploaded assets. GitHub's automatic source archives are not uploaded assets.
 - Lambda has a [handler](../../adapters/lambda/handler.js), but no production
   ZIP, layer, or image release pipeline. The root Dockerfile starts the Node
-  server; it is not a Lambda runtime image. [RFC 0011](0011-lambda-snapstart.md)
-  separately proposes one.
+  server; it is not a Lambda runtime image. This proposal covers the existing
+  container and Lambda ZIP packaging; a Lambda runtime image is outside its
+  release set.
 
 At the Scorecard revision linked above, recognised signature suffixes include
 `.sigstore.json`; signatures score 8, and `.intoto.jsonl` provenance scores 10
@@ -236,8 +237,8 @@ and sign within their own account; organisation-wide public layer publishing
 and cross-account signing permissions are a separate distribution commitment.
 
 Lambda's [native code-signing configuration][aws-config] does not support
-container-image functions. A future RFC 0011 image therefore needs its own
-ECR-compatible, single-architecture release and a deployment gate that verifies
+container-image functions. Any future Lambda runtime image therefore needs
+its own ECR-compatible, single-architecture release and a deployment gate that verifies
 the image before updating Lambda by digest. The existing Node-server image is
 not interchangeable with it. Neither signing nor revocation stops already
 running code: incident response must remove traffic from affected versions.
