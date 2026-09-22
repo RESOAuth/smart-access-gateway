@@ -40,6 +40,9 @@ export function reachableProfileClaims(config) {
   if (config.upstreams.length > 0) {
     for (const claim of PROFILE_CLAIMS) if (permitted(config, claim)) reachable.add(claim);
   }
+  if (config.localIdentities?.backend && config.localIdentities.backend !== 'none') {
+    for (const claim of PROFILE_CLAIMS) if (permitted(config, claim)) reachable.add(claim);
+  }
   if (config.otp.enabled && config.profile.nameFromEmail === 'infer' && permitted(config, 'name')) {
     reachable.add('name');
     reachable.add('urn:sag:name_inferred');

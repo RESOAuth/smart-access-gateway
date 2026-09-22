@@ -6,7 +6,7 @@
 # `up` always rebuilds and recreates. It is the command you run after editing
 # SAG, so a container left running on the old image would be a lie - and it
 # makes `up` idempotent, which is worth more here than the minute it costs.
-#   ./stack.sh verify        sign in against all three instances, headless
+#   ./stack.sh verify        sign in against all four instances, headless
 #   ./stack.sh logs sag-node follow one container's log
 #   ./stack.sh ps
 #   ./stack.sh restart sag-node
@@ -53,10 +53,12 @@ INSTANCES=(
   'sag-node|http://localhost:8791/healthz'
   'sag-workers|http://localhost:8792/healthz'
   'sag-lambda|http://localhost:8793/healthz'
+  'sag-local|http://localhost:8794/healthz'
   'rp-node|http://localhost:8801/start'
   'rp-workers|http://localhost:8802/start'
   'rp-lambda|http://localhost:8803/start'
   'rp-cimd|http://localhost:8804/start'
+  'rp-local|http://localhost:8805/start'
 )
 
 # The services that cannot work until AWS has been provisioned, restarted once
@@ -95,11 +97,14 @@ map() {
   http://localhost:8803          AWS KMS           DynamoDB         an S3 bucket
   http://localhost:8804          the Node instance again, reached by a client
                                  that describes itself and is registered nowhere
+  http://localhost:8805          a second Node instance using local password
+                                 and authenticator credentials from JSON files
 
   The instances themselves, if you would rather drive them directly:
     http://localhost:8791  Node        .well-known/openid-configuration
     http://localhost:8792  workerd     jwks.json
     http://localhost:8793  Lambda      healthz
+    http://localhost:8794  Node        local identities
     http://localhost:4566  LocalStack  _localstack/health
 
   Everything shares the host's network, so these are the same addresses from
@@ -110,6 +115,9 @@ map() {
 
   Check the whole thing without a browser:
     ./stack.sh verify
+
+  The local account is operator-provisioned. See README.md before running:
+    ./stack.sh verify sag-local
 
 MAP
 }

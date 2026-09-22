@@ -101,6 +101,68 @@ export function otpPage(ctx, { tx, email, error, devCode, resent, action, change
   return layout(ctx, { title: 'Check your email', body, legal, clientLogoUri, clientLogoAlt });
 }
 
+/** Local password entry, offered by configured domain rather than file hit. */
+export function localPasswordPage(ctx, { tx, email, error, action, changeAction, upstreams = [], upstreamAction, maxLength = 1024, clientLogoUri, clientLogoAlt, legal }) {
+  const alternatives = upstreams
+    .map(
+      (upstream) =>
+        '<form method="post" action="' + e(upstreamAction) + '">' +
+        hiddenFields({ tx, upstream: upstream.id }) +
+        '<button type="submit" class="secondary" data-busy-label="Redirecting...">Continue with ' +
+        e(upstream.label) +
+        '</button></form>',
+    )
+    .join('\n          ');
+  const body = `
+      <h1>Enter your password</h1>
+      <p class="lede">Sign in as <strong>${e(email)}</strong>.</p>
+      ${errorBlock(error?.title, error?.detail)}
+      <form method="post" action="${e(action)}">
+        ${hiddenFields({ tx })}
+        <div class="field">
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password"
+                 autocomplete="current-password" maxlength="${e(maxLength)}" required
+                 ${error ? 'aria-invalid="true"' : ''}>
+        </div>
+        <button type="submit" data-busy-label="Signing in...">Sign in</button>
+      </form>
+      <div class="also">
+        ${alternatives}
+        <form method="post" action="${e(changeAction)}">
+          ${hiddenFields({ tx })}
+          <button type="submit" class="secondary">Use a different email address</button>
+        </form>
+      </div>`;
+  return layout(ctx, { title: 'Enter your password', body, legal, clientLogoUri, clientLogoAlt });
+}
+
+/** TOTP or one of the identity's single-use backup codes. */
+export function localMfaPage(ctx, { tx, email, error, action, changeAction, clientLogoUri, clientLogoAlt, legal }) {
+  const body = `
+      <h1>Enter a verification code</h1>
+      <p class="lede">Use an authenticator code for <strong>${e(email)}</strong>, or enter one of your backup codes.</p>
+      ${errorBlock(error?.title, error?.detail)}
+      <form method="post" action="${e(action)}">
+        ${hiddenFields({ tx })}
+        <div class="field">
+          <label for="code">Verification code</label>
+          <input id="code" name="code" type="text" class="code"
+                 inputmode="text" autocomplete="one-time-code" autocapitalize="characters"
+                 autocorrect="off" spellcheck="false" maxlength="64" required
+                 ${error ? 'aria-invalid="true"' : ''}>
+        </div>
+        <button type="submit" data-busy-label="Verifying...">Verify</button>
+      </form>
+      <div class="also">
+        <form method="post" action="${e(changeAction)}">
+          ${hiddenFields({ tx })}
+          <button type="submit" class="secondary">Use a different account</button>
+        </form>
+      </div>`;
+  return layout(ctx, { title: 'Verification code', body, legal, clientLogoUri, clientLogoAlt });
+}
+
 /**
  * Screen 3: continue as, or sign in as somebody else.
  *
@@ -249,5 +311,7 @@ export function legalFor(config, source = {}) {
 function describeMethod(session) {
   if (session.upstreamLabel) return 'Signed in with ' + session.upstreamLabel;
   if (session.acr && session.acr.endsWith('email-otp')) return 'Verified by email code';
+  if (session.acr && session.acr.endsWith('local-mfa')) return 'Signed in with password and verification code';
+  if (session.acr && session.acr.endsWith('local-password')) return 'Signed in with password';
   return 'Already signed in';
 }

@@ -12,8 +12,9 @@
 //
 //   * a signature made by KMS or by a separate Worker, verified against the
 //     JWKS that instance publishes;
-//   * an authorisation code refused the second time, which on three instances
-//     means three different stores answering "have I seen this?";
+//   * an authorisation code refused the second time, which across four
+//     instances means three different store implementations answering "have I
+//     seen this?";
 //   * a session cookie sealed by one platform and opened again by it, which is
 //     what makes the silent second sign-in work;
 //   * on Lambda, a request that has been through an API Gateway event and back,
@@ -71,6 +72,21 @@ const INSTANCES = [
     // The document is the registration, so checking it is part of checking the
     // client: SAG reads exactly this and nothing else.
     metadataDocument: true,
+  },
+  {
+    name: 'sag-local',
+    title: 'Node, with file-backed local identities',
+    issuer: 'http://localhost:8794',
+    clientId: 'rp-local',
+    redirectUri: 'http://localhost:8805/callback',
+    stub: 'http://localhost:8805',
+    auth: {
+      email: process.env.SAG_LOCAL_STACK_EMAIL || 'local.user@local.test',
+      password: process.env.SAG_LOCAL_STACK_PASSWORD || 'local-stack-password-not-for-production',
+      // Public test seed generated with the fixture. An override makes it
+      // possible to replace that fixture without changing this script.
+      totpSecret: process.env.SAG_LOCAL_STACK_TOTP_SECRET || 'CMTADK6EESB3ORC5GFPEWRXOYBQMMWCX',
+    },
   },
 ];
 
@@ -130,6 +146,83 @@ const field = (html, name) => {
 
 /** The development notice on the OTP page, which is where the code appears. */
 const devCode = (html) => html.match(/<code>([0-9A-Z]{6,12})<\/code>/)?.[1];
+
+/** Decode an RFC 4648 base32 TOTP seed without adding a stack-only package. */
+function base32(value) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const clean = String(value || '').toUpperCase().replace(/[\s=-]/g, '');
+  if (!clean) throw new Error('the local TOTP seed is empty');
+  let bits = 0;
+  let held = 0;
+  const bytes = [];
+  for (const char of clean) {
+    const digit = alphabet.indexOf(char);
+    if (digit < 0) throw new Error('the local TOTP seed is not base32');
+    held = (held << 5) | digit;
+    bits += 5;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes.push((held >>> bits) & 0xff);
+    }
+  }
+  return Uint8Array.from(bytes);
+}
+
+async function totpCode(secret, step) {
+  const key = await crypto.subtle.importKey('raw', base32(secret), { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']);
+  const counter = new Uint8Array(8);
+  new DataView(counter.buffer).setBigUint64(0, BigInt(step));
+  const digest = new Uint8Array(await crypto.subtle.sign('HMAC', key, counter));
+  const offset = digest[digest.length - 1] & 0x0f;
+  const binary =
+    ((digest[offset] & 0x7f) << 24) |
+    (digest[offset + 1] << 16) |
+    (digest[offset + 2] << 8) |
+    digest[offset + 3];
+  return String(binary % 1000000).padStart(6, '0');
+}
+
+const localTotpSteps = new Map();
+
+async function nextLocalTotp(instance, afterStep) {
+  if (!instance.auth?.totpSecret) return undefined;
+  let step = Math.floor(Date.now() / 30000);
+  const previous = afterStep ?? localTotpSteps.get(instance.name);
+  if (previous !== undefined && step <= previous) {
+    // A used TOTP step is persisted in the fixture's writable copy. A verifier
+    // rerun in the same 30-second window must wait for a genuinely new code,
+    // not weaken the store's replay defence or require the volume to be reset.
+    await new Promise((resolve) => setTimeout(resolve, (previous + 1) * 30000 - Date.now() + 250));
+    step = Math.floor(Date.now() / 30000);
+  }
+  localTotpSteps.set(instance.name, step);
+  return { code: await totpCode(instance.auth.totpSecret, step), step };
+}
+
+async function submitLocalMfa(instance, agent, page) {
+  const generated = await nextLocalTotp(instance);
+  if (!generated) {
+    throw new Error('the local fixture requires TOTP; set SAG_LOCAL_STACK_TOTP_SECRET to its base32 seed');
+  }
+  let response = await agent.form(new URL('/authorize/local-mfa', instance.issuer).toString(), {
+    tx: field(page, 'tx'),
+    code: generated.code,
+  });
+  if (response.status === 303) return response;
+
+  const retryPage = await response.text();
+  const retryTx = field(retryPage, 'tx');
+  if (!response.ok || !retryTx || !retryPage.includes('name="code"')) {
+    throw new Error('/authorize/local-mfa answered ' + response.status + ':\n' + retryPage.slice(0, 400));
+  }
+
+  const retry = await nextLocalTotp(instance, generated.step);
+  response = await agent.form(new URL('/authorize/local-mfa', instance.issuer).toString(), {
+    tx: retryTx,
+    code: retry.code,
+  });
+  return response;
+}
 
 async function pkce() {
   const verifier = random(32);
@@ -210,16 +303,38 @@ async function signIn(instance, agent, meta, { email, extra = {} } = {}) {
   const tx = field(emailPage, 'tx');
   if (!tx) throw new Error('the first page carried no transaction:\n' + emailPage.slice(0, 400));
 
-  const otpRes = await agent.form(new URL('/authorize/email', instance.issuer).toString(), { tx, email });
-  if (!otpRes.ok) throw new Error('/authorize/email answered ' + otpRes.status);
-  const otpPage = await otpRes.text();
-  const code = devCode(otpPage);
-  if (!code) throw new Error('no development code on the code page:\n' + otpPage.slice(0, 400));
+  const routed = await agent.form(new URL('/authorize/email', instance.issuer).toString(), { tx, email });
+  if (!routed.ok) throw new Error('/authorize/email answered ' + routed.status);
+  const routedPage = await routed.text();
+  let done;
+  let code;
 
-  const done = await agent.form(new URL('/authorize/otp', instance.issuer).toString(), {
-    tx: field(otpPage, 'tx'),
-    code,
-  });
+  if (instance.auth) {
+    if (!routedPage.includes('name="password"')) {
+      throw new Error('the local account did not reach the password page:\n' + routedPage.slice(0, 400));
+    }
+    const password = await agent.form(new URL('/authorize/local-password', instance.issuer).toString(), {
+      tx: field(routedPage, 'tx'),
+      password: instance.auth.password,
+    });
+    if (password.status === 303) {
+      done = password;
+    } else {
+      if (!password.ok) throw new Error('/authorize/local-password answered ' + password.status);
+      const mfaPage = await password.text();
+      if (!mfaPage.includes('name="code"')) {
+        throw new Error('the local password did not complete or reach the verification-code page:\n' + mfaPage.slice(0, 400));
+      }
+      done = await submitLocalMfa(instance, agent, mfaPage);
+    }
+  } else {
+    code = devCode(routedPage);
+    if (!code) throw new Error('no development code on the code page:\n' + routedPage.slice(0, 400));
+    done = await agent.form(new URL('/authorize/otp', instance.issuer).toString(), {
+      tx: field(routedPage, 'tx'),
+      code,
+    });
+  }
   if (done.status !== 303) throw new Error('expected a redirect back to the client, got ' + done.status);
   const location = new URL(done.headers.get('location'));
   if (location.searchParams.get('error')) {
@@ -246,9 +361,12 @@ async function signIn(instance, agent, meta, { email, extra = {} } = {}) {
  * are scoped to a host and ignore the port, so the stack's sessions genuinely
  * do share a jar on localhost. The names differ, so nothing collides.
  */
-async function checkStub(instance, email) {
-  const agent = browser();
-  let res = await agent.get(instance.stub + '/start');
+async function checkStub(instance, email, agent = browser()) {
+  // Reuse the authenticated browser for local MFA and ask for a silent
+  // authorisation. That still exercises the relying party's discovery, token
+  // exchange and id_token verification without trying to reuse a TOTP step,
+  // which the identity store correctly refuses.
+  let res = await agent.get(instance.stub + '/start' + (instance.auth ? '?prompt=none' : ''));
   let hops = 0;
 
   while (hops < 12) {
@@ -273,9 +391,20 @@ async function checkStub(instance, email) {
       res = await agent.form(instance.issuer + '/authorize/email', { tx: field(html, 'tx'), email });
       continue;
     }
+    if (html.includes('name="tx"') && html.includes('name="password"') && instance.auth) {
+      res = await agent.form(instance.issuer + '/authorize/local-password', {
+        tx: field(html, 'tx'),
+        password: instance.auth.password,
+      });
+      continue;
+    }
     const code = devCode(html);
     if (html.includes('name="tx"') && code) {
       res = await agent.form(instance.issuer + '/authorize/otp', { tx: field(html, 'tx'), code });
+      continue;
+    }
+    if (html.includes('name="tx"') && html.includes('name="code"') && instance.auth) {
+      res = await submitLocalMfa(instance, agent, html);
       continue;
     }
     if (html.includes('Signed in')) {
@@ -292,7 +421,7 @@ async function checkInstance(instance) {
   const agent = browser();
   // A fresh address per run, so repeated runs are not fighting the send limits
   // an instance is meant to enforce.
-  const email = 'stack-' + random(4).toLowerCase().replace(/[^a-z0-9]/g, '') + '@example.test';
+  const email = instance.auth?.email || 'stack-' + random(4).toLowerCase().replace(/[^a-z0-9]/g, '') + '@example.test';
 
   // --- What the instance says it is ----------------------------------------
   const healthRes = await fetch(instance.issuer + '/healthz');
@@ -304,6 +433,9 @@ async function checkInstance(instance) {
   notes.push('signing ' + health.signing.primary.backend + ' / ' + health.signing.primary.alg);
   notes.push('clients ' + health.clients.store + (health.clients.static ? ' + ' + health.clients.static + ' static' : ''));
   if (health.signing.primary.ephemeral) throw new Error('the signing key is ephemeral, so nothing here would survive a restart');
+  if (Boolean(health.routes?.local) !== Boolean(instance.auth)) {
+    throw new Error('the health document reports local authentication as ' + Boolean(health.routes?.local));
+  }
   // Whether a state store is configured is no longer published, and does not
   // need to be: the replay attempt further down is the real test of it.
 
@@ -353,6 +485,18 @@ async function checkInstance(instance) {
     nonce: first.nonce,
   });
   if (claims.email !== email) throw new Error('the id_token is for ' + claims.email + ', not ' + email);
+  if (instance.auth) {
+    if ('email_verified' in claims) throw new Error('a local password asserted email_verified');
+    const expectedAcr = instance.auth.totpSecret ? 'urn:sag:acr:local-mfa' : 'urn:sag:acr:local-password';
+    if (claims.acr !== expectedAcr) throw new Error('local acr is ' + claims.acr + ', expected ' + expectedAcr);
+    const expectedAmr = instance.auth.totpSecret ? ['pwd', 'otp', 'mfa'] : ['pwd'];
+    for (const method of expectedAmr) {
+      if (!claims.amr?.includes(method)) throw new Error('local amr does not include ' + method);
+    }
+    notes.push('local ' + (instance.auth.totpSecret ? 'password + TOTP' : 'password'));
+  } else if (claims.email_verified !== true) {
+    throw new Error('email-code authentication did not assert email_verified');
+  }
   notes.push('id_token ' + header.alg + ' kid ' + String(header.kid).slice(0, 12));
   notes.push('acr ' + claims.acr);
 
@@ -390,9 +534,11 @@ async function checkInstance(instance) {
   if (!userinfo.ok) throw new Error('/userinfo answered ' + userinfo.status);
   if (!claims.sub) throw new Error('the id_token carries no sub, so SUBJECT_TYPE did not take effect');
   if (profile.sub !== claims.sub) throw new Error('/userinfo is about a different subject');
+  if (instance.auth && 'email_verified' in profile) throw new Error('/userinfo asserted email_verified for a local password');
+  if (!instance.auth && profile.email_verified !== true) throw new Error('/userinfo omitted email_verified after an email code');
 
   // And once more through the application, in its own browser.
-  await checkStub(instance, 'stub-' + email);
+  await checkStub(instance, instance.auth ? email : 'stub-' + email, instance.auth ? agent : undefined);
   notes.push('the stub at ' + instance.stub + ' signed in too');
 
   return { notes, kid: header.kid };

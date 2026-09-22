@@ -87,6 +87,34 @@ function schemes(env, key, fallback = ['*']) {
   return [...new Set(values)];
 }
 
+/** Exact domains, wildcard suffixes, or an explicit catch-all. */
+function identityDomains(env, key) {
+  const values = list(env, key).map((value) => value.toLowerCase());
+  for (const value of values) {
+    if (value === '*') continue;
+    const domain = value.startsWith('*.') ? value.slice(2) : value;
+    const labels = domain.split('.');
+    if (
+      !domain ||
+      domain.length > 253 ||
+      labels.length < 2 ||
+      labels.some(
+        (label) =>
+          !label ||
+          label.length > 63 ||
+          !/^[a-z0-9-]+$/.test(label) ||
+          label.startsWith('-') ||
+          label.endsWith('-'),
+      )
+    ) {
+      throw new ConfigError(
+        key + ' contains an invalid domain: "' + value + '". Use example.com, *.example.com, or *.',
+      );
+    }
+  }
+  return [...new Set(values)];
+}
+
 /**
  * The first of several environment variable names that is actually set.
  *
@@ -806,6 +834,8 @@ export function loadConfig(env = {}, opts = {}) {
   // the operator reads them.
   const upstreams = readUpstreams(env, internalWarnings);
   const staticClients = readStaticClients(env, internalWarnings);
+  const localIdentitiesBackend = oneOf(env, 'LOCAL_IDENTITIES_BACKEND', ['none', 'file'], 'none');
+  const localIdentityDomains = identityDomains(env, 'LOCAL_IDENTITY_DOMAINS');
 
   // With nothing configured at all there would be no relying party to try the
   // flow with, so development mode supplies one. Its redirect URIs are all
@@ -841,8 +871,8 @@ export function loadConfig(env = {}, opts = {}) {
   if (otpEnabled && emailProvider === 'console' && !devMode) {
     problems.push('EMAIL_PROVIDER is "console", which only prints codes to the log. Configure a real sender or set OTP_ENABLED=false.');
   }
-  if (upstreams.length === 0 && !otpEnabled) {
-    problems.push('No upstream providers are configured and OTP_ENABLED is false, so nobody could ever sign in.');
+  if (upstreams.length === 0 && !otpEnabled && localIdentitiesBackend === 'none') {
+    problems.push('No upstream providers or local identities are configured and OTP_ENABLED is false, so nobody could ever sign in.');
   }
 
   // The one optional piece of state in SAG, shared by single-use
@@ -882,6 +912,16 @@ export function loadConfig(env = {}, opts = {}) {
   if (stateStore.required && stateStore.backend === 'none') {
     throw new ConfigError(
       'REQUIRE_STATE_STORE is set but STATE_STORE_BACKEND is "none" (or unset). Configure a backend, or unset REQUIRE_STATE_STORE.',
+    );
+  }
+  if (localIdentitiesBackend !== 'none' && localIdentityDomains.length === 0) {
+    problems.push(
+      'LOCAL_IDENTITIES_BACKEND is file but LOCAL_IDENTITY_DOMAINS is empty. Name the domains that should always show local sign-in, or use * deliberately.',
+    );
+  }
+  if (localIdentitiesBackend !== 'none' && stateStore.backend === 'none') {
+    problems.push(
+      'Local password authentication requires an atomic STATE_STORE_BACKEND for attempt limits. Configure memory for one process, or a shared backend.',
     );
   }
 
@@ -994,6 +1034,21 @@ export function loadConfig(env = {}, opts = {}) {
       // separate accounts - turns it off, and a single relying party can
       // disagree on its own with CLIENT_<SLUG>_SANITISE_PLUS_EMAILS.
       sanitisePlusEmails: bool(env, 'SANITISE_PLUS_EMAILS', true),
+    },
+
+    localIdentities: {
+      // Filesystem access and Argon2 stay in the Node adapter. The core sees a
+      // binding with the same narrow shape as the file-backed client store.
+      backend: localIdentitiesBackend,
+      directory: str(env, 'LOCAL_IDENTITIES_DIR'),
+      bindingName: str(env, 'LOCAL_IDENTITIES_BINDING', 'SAG_LOCAL_IDENTITIES'),
+      domains: localIdentityDomains,
+      attemptWindowSeconds: int(env, 'LOCAL_AUTH_ATTEMPT_WINDOW', 300, { min: 30, max: 86400 }),
+      maxAttempts: int(env, 'LOCAL_AUTH_MAX_ATTEMPTS', 10, { min: 1, max: 1000 }),
+      networkMaxAttempts: int(env, 'LOCAL_AUTH_NETWORK_MAX_ATTEMPTS', 50, { min: 0, max: 10000 }),
+      maxPasswordBytes: int(env, 'LOCAL_PASSWORD_MAX_BYTES', 1024, { min: 64, max: 4096 }),
+      totpSkew: int(env, 'LOCAL_TOTP_SKEW', 1, { min: 0, max: 5 }),
+      argon2Concurrency: int(env, 'LOCAL_ARGON2_CONCURRENCY', 4, { min: 1, max: 32 }),
     },
 
     cors: {
@@ -1209,7 +1264,9 @@ export function loadConfig(env = {}, opts = {}) {
   }
   if (stateStore.backend === 'memory' && !devMode) {
     internalWarnings.push(
-      'The state store backend is "memory", which only prevents code and client assertion reuse within a single instance, records session revocations within that instance, and counts OTP sends per instance. Use cf-durable-object or dynamodb if more than one instance can serve a request.',
+      'The state store backend is "memory", which only prevents code and client assertion reuse within a single instance, records session revocations within that instance, and counts OTP sends' +
+        (localIdentitiesBackend !== 'none' ? ' and local authentication attempts' : '') +
+        ' per instance. Use cf-durable-object or dynamodb if more than one instance can serve a request.',
     );
   }
   if (stateStore.backend === 'none' && !devMode) {
@@ -1222,6 +1279,11 @@ export function loadConfig(env = {}, opts = {}) {
     );
   }
   if (!config.subject.salt) {
+    if (config.localIdentities.backend !== 'none') {
+      problems.push(
+        'SUBJECT_SALT must be set explicitly when local identities are enabled, because it keys their privacy-preserving filenames and must never rotate.',
+      );
+    }
     if (devMode) {
       config.subject.salt = 'sag-development-only-subject-salt';
       warnings.push('SUBJECT_SALT is not set; using the development salt, so every `sub` this instance issues is guessable.');
@@ -1231,9 +1293,15 @@ export function loadConfig(env = {}, opts = {}) {
       );
     }
   } else if (config.subject.salt.length < 16) {
-    internalWarnings.push(
-      'SUBJECT_SALT is shorter than 16 characters. Keep the existing value to preserve current subject identifiers, but use at least 16 random characters for a new deployment.',
-    );
+    const detail =
+      'SUBJECT_SALT is shorter than 16 characters. Keep the existing value to preserve current subject identifiers, but use at least 16 random characters for a new deployment.';
+    if (config.localIdentities.backend !== 'none') {
+      problems.push(
+        detail + ' Local identity filenames require an unguessable keyed digest, so this backend cannot use the weak value.',
+      );
+    } else {
+      internalWarnings.push(detail);
+    }
   }
   // An endpoint override is how a local stack points at an emulator, so an
   // http one is expected in development and never anywhere else: SAG's signed

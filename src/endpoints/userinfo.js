@@ -55,7 +55,7 @@ export async function handleUserinfo(ctx) {
   const scope = grant.scope || [];
   if (scope.includes('email')) {
     claims.email = grant.email;
-    claims.email_verified = true;
+    if (grant.email_verified === true) claims.email_verified = true;
   }
   if (scope.includes('profile') && grant.claims) {
     Object.assign(claims, outboundClaims(ctx.config, grant.claims));

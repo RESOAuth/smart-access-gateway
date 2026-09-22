@@ -1,0 +1,29 @@
+{
+  "v": 1,
+  "id": "H-EBN6rtgS3nEKRSEqrKPrK6",
+  "revision": 1,
+  "security_version": 1,
+  "mfa_required": true,
+  "password": "$argon2id$v=19$m=65536,t=3,p=1$Md0SB+aPMMbemH4qQPE0Fw$dtOkJ1x431Ykofj5ufnmWICt2B6rhHMPXtwUV9eGSLk",
+  "totp": [
+    {
+      "id": "hcD_Gr2aYYXS",
+      "label": "Authenticator",
+      "algorithm": "SHA1",
+      "digits": 6,
+      "period": 30,
+      "secret": "k1.local-identity-totp/H-EBN6rtgS3nEKRSEqrKPrK6/hcD_Gr2aYYXS.zD-1uTtRToVf14SU.-tZQjRpXsHOWbp04wv5cHHhDbl93vPU-CnIE5o-jj5fBy6l7m7SVdlkTYP0oKBxZ164lSrhQx8g7rlMR8rMPRuiOl2J_RinTlTFSiKeelgZlQeptIKNeZeeQ1otuIgxHGNE4eE2WzWPnYJbseU_oFEEyOt3NRm0K1tKAoLh6GvrD8y2BzG-EQrjDcA"
+    }
+  ],
+  "backup_codes": [
+    {
+      "id": "DZFZLLTN",
+      "hash": "$argon2id$v=19$m=65536,t=3,p=1$+e9zT46OJ4wZS3eDU9SVXg$3FRCKq9jkqDyLJEMOdCRfhw7DgVEGZwYHfMEFlgbiJY"
+    },
+    {
+      "id": "2UXK7SFX",
+      "hash": "$argon2id$v=19$m=65536,t=3,p=1$IEL3uataCxr7yyHeNIKdIw$d0jHMe7kNEpF1DoCs+vO2/norr44VxmeMc1PnEoqrtk"
+    }
+  ],
+  "upstreams": []
+}

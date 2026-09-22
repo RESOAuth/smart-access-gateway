@@ -1,25 +1,28 @@
-# The local stack: one SAG, three ways, with four applications signing in.
+# The local stack: SAG on three platforms, a local-identity instance, and five
+# applications signing in.
 #
 #   ./stack.sh up          build, start, wait, then print the map
 #   ./stack.sh verify      sign in against every one of them, headless
 #   ./stack.sh logs sag-node
 #   ./stack.sh down
 #
-# Why three instances rather than one: SAG is one core with three loaders, and
-# almost everything that differs between them is unreachable from a unit test -
-# a Durable Object, a KMS signature, the way API Gateway hands over cookies.
-# Each instance here therefore runs a different backend for every replaceable
-# part, so the stack fails in the place the platform actually differs:
+# Why three platform variants rather than one: SAG is one core with three
+# loaders, and almost everything that differs between them is unreachable from
+# a unit test - a Durable Object, a KMS signature, the way API Gateway hands
+# over cookies. Each variant therefore runs a different backend for every
+# replaceable part, so the stack fails in the place the platform actually
+# differs. The fourth instance isolates local authentication:
 #
 #                     signing            state             clients
 #   sag-node    8791  a local key file   in-process map    a directory of JSON
 #   sag-workers 8792  a private Worker   Durable Object    environment variables
 #   sag-lambda  8793  AWS KMS            DynamoDB          an S3 bucket
+#   sag-local   8794  a local key file   in-process map    environment variables
 #
-# All three also name each other in PEER_JWKS_URLS, a complete mesh, so each
-# one's /jwks.json ends up describing all three signers rather than only its
-# own - see docs/multi-region.md. `./stack.sh verify` checks the mesh itself,
-# not only that each instance trusts its own key.
+# The original three also name each other in PEER_JWKS_URLS, a complete mesh,
+# so each one's /jwks.json ends up describing all three signers rather than
+# only its own - see docs/multi-region.md. `./stack.sh verify` checks the mesh
+# itself, not only that each instance trusts its own key.
 #
 # Nothing is stubbed inside SAG. workerd and the Durable Objects are the real
 # implementation via wrangler; the Lambda runs in AWS's own base image behind
@@ -105,7 +108,7 @@ services:
       CLIENTS_STORE_BACKEND: file
       CLIENTS_STORE_DIR: /srv/clients
       UI_PRODUCT_NAME: Node instance
-      # A cookie ignores the port, so all three instances would otherwise share
+      # A cookie ignores the port, so all four instances would otherwise share
       # one sag_session on localhost and sign each other out as you click
       # between them. Not something a deployment on real hostnames ever hits.
       SESSION_COOKIE_NAME: sag_session_node
@@ -128,6 +131,65 @@ services:
       - ./clients:/srv/clients:ro
     healthcheck:
       test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:8791/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 6
+
+  # --- Instance four: local identities -------------------------------------
+  #
+  # A second Node instance keeps the platform matrix above intact while adding
+  # the one authentication method that deliberately belongs only on a local
+  # filesystem. Its master secret and subject salt are public development
+  # values so the committed fixture can be opened after it is copied into the
+  # named data volume. The signing key is still generated into that volume and
+  # survives a restart.
+  sag-local:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: sag:local
+    container_name: sag-local
+    network_mode: host
+    restart: unless-stopped
+    env_file:
+      - ./env/sag-common.env
+    command:
+      - sh
+      - -eu
+      - -c
+      - |
+        mkdir -p /data/identities
+        chmod 700 /data/identities
+        if [ ! -e /data/identities/bb63509d32db5c83f9e5211c00ef89e9fe8ddaa0a87a37e95e73ee2411f02298.json ]; then
+          cp /srv/local-identity-seed/bb63509d32db5c83f9e5211c00ef89e9fe8ddaa0a87a37e95e73ee2411f02298.json /data/identities/
+        fi
+        chmod 600 /data/identities/bb63509d32db5c83f9e5211c00ef89e9fe8ddaa0a87a37e95e73ee2411f02298.json
+        exec node tools/bootstrap.js
+    environment:
+      SAG_ISSUER: http://localhost:8794
+      SAG_SECRET: local-stack-local-master-secret-not-a-real-one-0123456789
+      SUBJECT_SALT: local-stack-local-subject-salt-not-a-real-one-0123456789
+      HOST: 0.0.0.0
+      PORT: '8794'
+      STATE_STORE_BACKEND: memory
+      LOCAL_IDENTITIES_BACKEND: file
+      LOCAL_IDENTITIES_DIR: /data/identities
+      LOCAL_IDENTITY_DOMAINS: local.test
+      OTP_ENABLED: 'false'
+      CLIENT_RPLOCAL_ID: rp-local
+      CLIENT_RPLOCAL_NAME: Local identity stub
+      CLIENT_RPLOCAL_REDIRECT_URIS: http://localhost:8805/callback
+      CLIENT_RPLOCAL_POST_LOGOUT_REDIRECT_URIS: http://localhost:8805/
+      CLIENT_RPLOCAL_SCOPES: openid email profile
+      CLIENTS_CIMD_ENABLED: 'false'
+      UI_PRODUCT_NAME: Local identity instance
+      SESSION_COOKIE_NAME: sag_session_local
+    volumes:
+      - sag-local-data:/data
+      - ./identities:/srv/local-identity-seed:ro
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:8794/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
       start_period: 10s
@@ -250,8 +312,8 @@ services:
 
   # --- The applications ----------------------------------------------------
   #
-  # All four are the same hundred lines from examples/relying-party, differing
-  # only in which instance they trust and how they identify themselves. Four
+  # All five are the same hundred lines from examples/relying-party, differing
+  # only in which instance they trust and how they identify themselves. Five
   # separate applications rather than one with a switch, because that is what
   # catches an issuer or an audience leaking between them.
   #
@@ -273,7 +335,7 @@ services:
       EXAMPLE_CLIENT_ID: rp-node
       EXAMPLE_LABEL: Node stub
       EXAMPLE_COOKIE_NAME: rp_node_session
-      EXAMPLE_PEERS: Workers stub=http://localhost:8802,Lambda stub=http://localhost:8803,CIMD stub=http://localhost:8804
+      EXAMPLE_PEERS: Workers stub=http://localhost:8802,Lambda stub=http://localhost:8803,CIMD stub=http://localhost:8804,Local identity stub=http://localhost:8805
     depends_on:
       - sag-node
 
@@ -291,7 +353,7 @@ services:
       EXAMPLE_CLIENT_ID: rp-workers
       EXAMPLE_LABEL: Workers stub
       EXAMPLE_COOKIE_NAME: rp_workers_session
-      EXAMPLE_PEERS: Node stub=http://localhost:8801,Lambda stub=http://localhost:8803,CIMD stub=http://localhost:8804
+      EXAMPLE_PEERS: Node stub=http://localhost:8801,Lambda stub=http://localhost:8803,CIMD stub=http://localhost:8804,Local identity stub=http://localhost:8805
     depends_on:
       - sag-workers
 
@@ -313,7 +375,7 @@ services:
       EXAMPLE_CLIENT_SECRET: r-cs-local-stack-rp-lambda-secret-not-for-production
       EXAMPLE_LABEL: Lambda stub
       EXAMPLE_COOKIE_NAME: rp_lambda_session
-      EXAMPLE_PEERS: Node stub=http://localhost:8801,Workers stub=http://localhost:8802,CIMD stub=http://localhost:8804
+      EXAMPLE_PEERS: Node stub=http://localhost:8801,Workers stub=http://localhost:8802,CIMD stub=http://localhost:8804,Local identity stub=http://localhost:8805
     depends_on:
       - sag-lambda-gateway
 
@@ -339,10 +401,32 @@ services:
       EXAMPLE_USE_CIMD_AND_PUBLIC_CLIENT: '1'
       EXAMPLE_LABEL: CIMD stub
       EXAMPLE_COOKIE_NAME: rp_cimd_session
-      EXAMPLE_PEERS: Node stub=http://localhost:8801,Workers stub=http://localhost:8802,Lambda stub=http://localhost:8803
+      EXAMPLE_PEERS: Node stub=http://localhost:8801,Workers stub=http://localhost:8802,Lambda stub=http://localhost:8803,Local identity stub=http://localhost:8805
     depends_on:
       - sag-node
 
+  # A conventional public client against the local-identity instance. The
+  # account itself is provisioned into sag-local's data volume with
+  # tools/generate-local-identity.js rather than baked into either image.
+  rp-local:
+    image: sag-local-tools:latest
+    container_name: sag-rp-local
+    network_mode: host
+    restart: unless-stopped
+    command: ['node', 'examples/relying-party/server.js']
+    environment:
+      EXAMPLE_PORT: '8805'
+      EXAMPLE_HOST: 0.0.0.0
+      EXAMPLE_PUBLIC_ORIGIN: http://localhost:8805
+      SAG_ISSUER: http://localhost:8794
+      EXAMPLE_CLIENT_ID: rp-local
+      EXAMPLE_LABEL: Local identity stub
+      EXAMPLE_COOKIE_NAME: rp_local_session
+      EXAMPLE_PEERS: Node stub=http://localhost:8801,Workers stub=http://localhost:8802,Lambda stub=http://localhost:8803,CIMD stub=http://localhost:8804
+    depends_on:
+      - sag-local
+
 volumes:
   sag-node-data:
+  sag-local-data:
   sag-workers-state:

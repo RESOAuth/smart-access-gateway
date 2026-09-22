@@ -37,6 +37,9 @@ const CORE_CLAIMS = ['iss', 'sub', 'aud', 'exp', 'iat', 'auth_time', 'nonce', 'a
 function acrValuesFor(config) {
   const values = [];
   if (config.otp.enabled) values.push(ACR.OTP);
+  if (config.localIdentities?.backend && config.localIdentities.backend !== 'none') {
+    values.push(ACR.LOCAL_PASSWORD, ACR.LOCAL_MFA);
+  }
   if (config.upstreams.length > 0) values.push(ACR.FEDERATED, ACR.FEDERATED_MFA);
   return values;
 }

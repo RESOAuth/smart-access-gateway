@@ -48,7 +48,6 @@ are not reused. Numbers identify proposals, not implementation priority.
 | [0010](0010-siem-event-export.md) | Relaying authentication events to a SIEM, one destination per instance |
 | [0011](0011-lambda-snapstart.md) | Lambda SnapStart with preloaded configuration and restore-safe credentials |
 | [0013](0013-single-kid-withdrawal.md) | Withdrawing one signing key across a peered deployment without cache deletion |
-| [0014](0014-local-identity-pool.md) | A local user identity pool with passwords and MFA |
 | [0015](0015-production-replay-guarantees.md) | Production replay guarantees |
 | [0016](0016-trusted-authentication-assurance.md) | Trusted authentication assurance |
 | [0017](0017-client-trust-and-assertion-audiences.md) | Client trust and assertion audiences |

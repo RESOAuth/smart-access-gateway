@@ -42,6 +42,7 @@ export async function handleHealth(ctx) {
     routes: {
       upstreams: Object.fromEntries(Object.entries(upstreams).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))),
       otp: config.otp.enabled ? config.email.provider : false,
+      local: config.localIdentities.backend !== 'none',
     },
     clients: {
       static: config.clients.static.length,

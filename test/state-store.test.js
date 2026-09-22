@@ -40,6 +40,29 @@ test('the memory store is capped, so it cannot be made to exhaust the instance',
   assert.ok(store.size() <= 100, 'the cap must hold: ' + store.size());
 });
 
+test('best-effort counters cannot evict fail-closed account limits', async () => {
+  const store = createMemoryStore({ maxEntries: 3 });
+  assert.equal(await store.increment('local-password:account-a', 600, { failClosed: true }), 1);
+  assert.equal(await store.increment('local-password:account-b', 600, { failClosed: true }), 1);
+  assert.equal(await store.increment('otp-day:first', 600), 1);
+
+  // A new best-effort counter may replace the other best-effort counter, but
+  // both account counters remain live and retain their exact counts.
+  assert.equal(await store.increment('otp-day:second', 600), 1);
+  assert.equal(await store.increment('local-password:account-a', 600, { failClosed: true }), 2);
+  assert.equal(await store.increment('local-password:account-b', 600, { failClosed: true }), 2);
+
+  // Once the map contains only protected counters it denies new state rather
+  // than silently restoring an attacker's allowance on any existing account.
+  assert.equal(await store.increment('local-password:account-c', 600, { failClosed: true }), 1);
+  await assert.rejects(
+    () => store.increment('local-password:account-d', 600, { failClosed: true }),
+    /protected counters/,
+  );
+  assert.equal(await store.increment('local-password:account-a', 600, { failClosed: true }), 3);
+  await assert.rejects(() => store.increment('otp-day:third', 600), /protected counters/);
+});
+
 test('a full memory store refuses a claim rather than forgetting one', async () => {
   // Dropping a live claim would let a spent authorisation code be spent
   // again, silently, which is the opposite of what the store is for. Refusing

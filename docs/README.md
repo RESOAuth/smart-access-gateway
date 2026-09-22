@@ -33,6 +33,8 @@ on a website. Do not copy the design notes below to the user documentation.
   Practices passing criteria.
 - [release-verification.md](release-verification.md) - verify a complete signed
   release or a signed development image before deployment.
+- [local-identities.md](local-identities.md) - operator-provisioned password,
+  TOTP, backup-code, and linked-upstream identities for the Node adapter.
 - [adr/](adr/README.md) - why SAG's decisions were made, one record each.
 - [rfcs/](rfcs/README.md) - proposed but not yet decided, with the reasoning.
 - [../test/local-stack/](../test/local-stack/README.md) - a container, workerd,
