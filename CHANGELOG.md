@@ -4,6 +4,17 @@ All notable changes to SAG are recorded here. Releases use semantic versions.
 
 ## Unreleased
 
+### Added
+
+- Signed container and source releases, with a verified release manifest,
+  GitHub build provenance, and a deployment verifier. Maintainers start
+  Prepare release in GitHub Actions; it creates the version tag and starts
+  the build/sign/verify workflow, which publishes the release after
+  verification.
+- Automatic keyless signing and GitHub provenance for `bleeding-edge` images
+  built from `main`. Development tags move only after registry verification;
+  a separate deployment verifier checks the main workflow and source commit.
+
 ### Security
 
 None.

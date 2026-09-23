@@ -1,0 +1,7 @@
+name: Release verification tools
+description: Install checksum-pinned Cosign and GitHub CLI on Linux amd64
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: bash tools/release/install-tools.sh

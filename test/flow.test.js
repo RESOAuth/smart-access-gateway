@@ -2,7 +2,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createInstance, signInWithOtp, redeem, pkce, authorizeUrl, extractField, DEV_CLIENT, DEV_REDIRECT } from './harness.js';
+import { createInstance, signInWithOtp, redeem, pkce, authorizeUrl, extractField, extractDevCode, DEV_CLIENT, DEV_REDIRECT } from './harness.js';
 import { verifyCompact, decodeJwt, validateClaims } from '../src/crypto/jose.js';
 import { ACR } from '../src/acr.js';
 
@@ -222,6 +222,27 @@ test('form_post response mode posts the code instead of putting it in a URL', as
   );
 });
 
+test('form_post returns login_required and the original state without a session', async () => {
+  const sag = createInstance();
+  const { challenge } = await pkce();
+  const { path, params } = authorizeUrl({ challenge, response_mode: 'form_post', prompt: 'none' });
+
+  const res = await sag.raw(path);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('location'), null);
+  const html = await res.text();
+  assert.match(html, /<form method="post" action="http:\/\/127\.0\.0\.1:8788\/callback" data-autosubmit>/);
+  assert.equal(extractField(html, 'error'), 'login_required');
+  assert.equal(extractField(html, 'error_description'), 'There is no active session to answer this request from.');
+  assert.equal(extractField(html, 'state'), params.get('state'));
+  assert.equal(extractField(html, 'iss'), sag.env.SAG_ISSUER);
+  assert.equal(extractField(html, 'code'), undefined);
+  assert.equal(
+    res.headers.get('content-security-policy'),
+    "default-src 'none'; base-uri 'none'; script-src 'self'; form-action http://127.0.0.1:8788; frame-ancestors 'none'",
+  );
+});
+
 test('an unknown client is refused without redirecting anywhere', async () => {
   const sag = createInstance();
   const { challenge } = await pkce();
@@ -265,6 +286,64 @@ test('a wrong code is rejected and the attempt is counted', async () => {
   const badHtml = await bad.text();
   assert.match(badHtml, /not right/);
   assert.match(badHtml, /attempts left/);
+});
+
+test('an expired OTP is refused while the transaction can request a fresh code', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const sag = createInstance({ OTP_TTL: '60', TRANSACTION_TTL: '900' });
+  const { challenge } = await pkce();
+  const { path } = authorizeUrl({ challenge });
+  const first = await sag.raw(path);
+  const sent = await sag.postForm('/authorize/email', { tx: extractField(await first.text()), email: EMAIL });
+  const otpHtml = await sent.text();
+  const code = extractDevCode(otpHtml);
+  assert.ok(code);
+
+  // Expire only the code, so the transaction's separate deadline cannot mask it.
+  t.mock.timers.tick(61_000);
+  const expired = await sag.postForm('/authorize/otp', { tx: extractField(otpHtml), code });
+  assert.equal(expired.status, 400);
+  assert.equal(expired.headers.get('location'), null);
+  const expiredHtml = await expired.text();
+  assert.match(expiredHtml, /That code has expired/);
+  assert.match(expiredHtml, /Request another code and enter the new one/);
+
+  const resent = await sag.postForm('/authorize/resend', { tx: extractField(expiredHtml) });
+  assert.equal(resent.status, 200);
+  const freshHtml = await resent.text();
+  const freshCode = extractDevCode(freshHtml);
+  assert.ok(freshCode);
+  const done = await sag.postForm('/authorize/otp', { tx: extractField(freshHtml), code: freshCode });
+  assert.equal(done.status, 303);
+  assert.ok(new URL(done.headers.get('location')).searchParams.get('code'));
+});
+
+test('a correct OTP is refused after the transaction exhausts its attempts', async () => {
+  const sag = createInstance({ OTP_MAX_ATTEMPTS: '2' });
+  const { challenge } = await pkce();
+  const { path } = authorizeUrl({ challenge });
+  const first = await sag.raw(path);
+  const sent = await sag.postForm('/authorize/email', { tx: extractField(await first.text()), email: EMAIL });
+  const otpHtml = await sent.text();
+  const code = extractDevCode(otpHtml);
+  assert.ok(code);
+  let tx = extractField(otpHtml);
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const wrong = await sag.postForm('/authorize/otp', { tx, code: '000000000' });
+    assert.equal(wrong.status, 400);
+    const html = await wrong.text();
+    assert.match(html, /That code is not right/);
+    tx = extractField(html);
+  }
+
+  const exhausted = await sag.postForm('/authorize/otp', { tx, code });
+  assert.equal(exhausted.status, 400);
+  assert.equal(exhausted.headers.get('location'), null);
+  const html = await exhausted.text();
+  assert.match(html, /Too many incorrect codes/);
+  assert.match(html, /Request another code, or go back to the application and start again/);
+  assert.ok(extractField(html), 'the person can still request another code');
 });
 
 test('signing out clears the session so the next request needs interaction', async () => {
