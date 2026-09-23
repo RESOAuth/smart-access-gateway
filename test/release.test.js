@@ -41,7 +41,7 @@ function fixture(t) {
       buildDefinition: {
         buildType: 'https://actions.github.io/buildtypes/workflow/v1',
         externalParameters: { workflow: { repository: REPOSITORY_URL, path: WORKFLOW, ref: `refs/tags/${TAG}` } },
-        internalParameters: { github: { event_name: 'push', runner_environment: 'github-hosted' } },
+        internalParameters: { github: { event_name: 'workflow_dispatch', runner_environment: 'github-hosted' } },
         resolvedDependencies: [{ uri: `git+${REPOSITORY_URL}@refs/tags/${TAG}`, digest: { gitCommit: COMMIT } }],
       },
       runDetails: { builder: { id: policy.identity }, metadata: { invocationId: manifest.run.url } },
@@ -68,7 +68,7 @@ function fixture(t) {
   writeFileSync(statePath, JSON.stringify({ calls: [], images: {}, remote, identity: policy.identity, commit: COMMIT }));
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, RELEASE_TEST_STATE: statePath,
     RELEASE_TAG: TAG, RELEASE_COMMIT: COMMIT, GITHUB_RUN_ID: '12', GITHUB_RUN_ATTEMPT: '1',
-    GITHUB_REPOSITORY: REPOSITORY, GITHUB_EVENT_NAME: 'push', GITHUB_REF: `refs/tags/${TAG}`,
+    GITHUB_REPOSITORY: REPOSITORY, GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REF: `refs/tags/${TAG}`,
     GITHUB_SHA: COMMIT, GITHUB_OUTPUT: join(root, 'output') };
   const state = () => JSON.parse(readFileSync(statePath));
   const update = change => { const data = state(); change(data); writeFileSync(statePath, JSON.stringify(data)); };
@@ -230,7 +230,7 @@ test('candidate lookup distinguishes an absent image from a registry outage', t 
   fails(f.run('candidate'));
 });
 
-test('tag gate accepts a trusted signed main commit and rejects untrusted, unsigned, or failing sources', t => {
+function sourceFixture(t) {
   const f = fixture(t);
   const git = (...args) => execFileSync('git', args, { cwd: f.root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   git('init', '-b', 'main');
@@ -239,45 +239,81 @@ test('tag gate accepts a trusted signed main commit and rejects untrusted, unsig
   writeFileSync(join(f.root, 'package.json'), JSON.stringify({ version: '0.3.0' }));
   writeFileSync(join(f.root, 'package-lock.json'), JSON.stringify({ version: '0.3.0', packages: { '': { version: '0.3.0' } } }));
   writeFileSync(join(f.root, 'src/version.js'), "export const VERSION = '0.3.0';\n");
-  writeFileSync(join(f.root, 'CHANGELOG.md'), '## 0.3.0 - 2026-09-21\n\n### Security\n\nNone.\n');
   git('add', 'package.json', 'package-lock.json', 'src/version.js', 'CHANGELOG.md'); git('commit', '-m', 'Release fixture');
   const commit = git('rev-parse', 'HEAD');
   git('update-ref', 'refs/remotes/origin/main', commit);
-  const key = join(f.root, 'tag-key');
-  execFileSync('ssh-keygen', ['-t', 'ed25519', '-N', '', '-C', '', '-f', key], { stdio: 'ignore' });
-  git('-c', 'gpg.format=ssh', '-c', `user.signingkey=${key}`, 'tag', '-s', TAG, '-m', TAG);
   f.env.GITHUB_SHA = commit;
-  f.env.RELEASE_GPG_PUBLIC_KEYS = '';
-  f.env.RELEASE_SSH_ALLOWED_SIGNERS = `release namespaces="git" ${readFileSync(`${key}.pub`, 'utf8').trim()}`;
+  return { ...f, git, commit };
+}
+
+test('the release gate accepts a main commit at the dispatched tag and rejects other sources', t => {
+  const f = sourceFixture(t);
+  f.git('tag', TAG);
   passes(f.run('validate'));
-  const wrongKey = join(f.root, 'untrusted-key');
-  execFileSync('ssh-keygen', ['-t', 'ed25519', '-N', '', '-C', '', '-f', wrongKey], { stdio: 'ignore' });
-  const trustedSigners = f.env.RELEASE_SSH_ALLOWED_SIGNERS;
-  f.env.RELEASE_SSH_ALLOWED_SIGNERS = `release namespaces="git" ${readFileSync(`${wrongKey}.pub`, 'utf8').trim()}`;
-  fails(f.run('validate'));
-  f.env.RELEASE_SSH_ALLOWED_SIGNERS = trustedSigners;
+  f.env.GITHUB_EVENT_NAME = 'push';
+  fails(f.run('validate'), /Only a dispatched tag/);
+  f.env.GITHUB_EVENT_NAME = 'workflow_dispatch';
+  f.env.GITHUB_REF = 'refs/heads/main';
+  fails(f.run('validate'), /requested tag/);
+  f.env.GITHUB_REF = `refs/tags/${TAG}`;
+  f.env.GITHUB_SHA = COMMIT;
+  fails(f.run('validate'), /Tag moved/);
+  f.env.GITHUB_SHA = f.commit;
   f.update(s => s.checkConclusion = 'failure');
   fails(f.run('validate'), /must pass/);
   f.update(s => { delete s.checkConclusion; s.protected = false; });
   fails(f.run('validate'), /main must be protected/);
   f.update(s => delete s.protected);
-  git('tag', 'v0.4.0', TAG);
-  const previousTag = f.env.RELEASE_TAG; f.env.RELEASE_TAG = 'v0.4.0'; f.env.GITHUB_REF = 'refs/tags/v0.4.0';
-  fails(f.run('validate'), /Signed tag name/);
-  f.env.RELEASE_TAG = previousTag; f.env.GITHUB_REF = `refs/tags/${previousTag}`;
-  f.env.RELEASE_SSH_ALLOWED_SIGNERS = '';
-  fails(f.run('validate'), /public-key trust/);
-  git('tag', '-d', TAG); git('tag', TAG);
-  fails(f.run('validate'), /annotated signed tag/);
-  git('tag', '-d', TAG);
-  const gpgHome = join(f.root, 'gnupg'); mkdirSync(gpgHome, { mode: 0o700 });
-  const gpgEnv = { ...process.env, GNUPGHOME: gpgHome };
-  execFileSync('gpg', ['--batch', '--passphrase', '', '--quick-generate-key', 'SAG release <release@example.invalid>', 'ed25519', 'sign', '0'], { env: gpgEnv, stdio: 'ignore' });
-  const keys = execFileSync('gpg', ['--batch', '--with-colons', '--list-keys'], { env: gpgEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-  const fingerprint = keys.split('\n').find(line => line.startsWith('fpr:')).split(':')[9];
-  execFileSync('git', ['-c', 'gpg.format=openpgp', '-c', `user.signingkey=${fingerprint}`, 'tag', '-s', TAG, '-m', TAG], { cwd: f.root, env: gpgEnv, stdio: 'ignore' });
-  f.env.RELEASE_GPG_PUBLIC_KEYS = execFileSync('gpg', ['--batch', '--armor', '--export', fingerprint], { env: gpgEnv, encoding: 'utf8' });
-  passes(f.run('validate'));
+  f.git('commit', '--allow-empty', '-m', 'Outside main');
+  f.env.GITHUB_SHA = f.git('rev-parse', 'HEAD');
+  f.git('tag', '-f', TAG);
+  fails(f.run('validate'));
+});
+
+test('preparation creates the version tag and dispatches the tag workflow without signing keys', t => {
+  const f = sourceFixture(t);
+  f.env.GITHUB_REF = 'refs/heads/main';
+  passes(f.run('prepare-check'));
+  assert.equal(f.state().refs, undefined);
+  passes(f.run('prepare'));
+  assert.deepEqual(f.state().refs, [{ ref: `refs/tags/${TAG}`, object: { type: 'commit', sha: f.commit } }]);
+  assert.deepEqual(f.state().dispatchedRuns, [{ id: 34, head_sha: f.commit, head_branch: TAG }]);
+  passes(f.run('prepare'));
+  assert.equal(f.state().calls.filter(call => call[1] === 'workflow').length, 1, 'a retry points to the existing release run');
+  assert.equal(f.state().calls.filter(call => call.includes('POST')).length, 1, 'a retry never recreates the tag');
+});
+
+test('preparation retries a failed dispatch using the same tag and source', t => {
+  const f = sourceFixture(t);
+  f.env.GITHUB_REF = 'refs/heads/main';
+  f.update(s => s.fail = 'gh workflow run');
+  fails(f.run('prepare'));
+  assert.equal(f.state().refs[0].object.sha, f.commit);
+  f.update(s => delete s.fail);
+  passes(f.run('prepare'));
+  assert.equal(f.state().calls.filter(call => call.includes('POST')).length, 1);
+  assert.equal(f.state().dispatchedRuns[0].head_sha, f.commit);
+});
+
+test('preparation refuses a different branch, version, failing checks, and conflicting tag', t => {
+  const f = sourceFixture(t);
+  f.env.GITHUB_REF = 'refs/heads/feature';
+  fails(f.run('prepare'), /must run from main/);
+  assert.equal(f.state().refs, undefined);
+  f.env.GITHUB_REF = 'refs/heads/main';
+  f.env.RELEASE_TAG = 'v0.4.0';
+  fails(f.run('prepare'), /package.json does not match/);
+  assert.equal(f.state().refs, undefined);
+  f.env.RELEASE_TAG = TAG;
+  f.update(s => s.checkConclusion = 'failure');
+  fails(f.run('prepare'), /must pass/);
+  assert.equal(f.state().refs, undefined);
+  f.update(s => {
+    delete s.checkConclusion;
+    s.refs = [{ ref: `refs/tags/${TAG}`, object: { type: 'commit', sha: COMMIT } }];
+  });
+  fails(f.run('prepare'), /different commit/);
+  assert.equal(f.state().dispatchedRuns, undefined);
 });
 
 test('source packaging uses the Git object and never archives the populated working tree', t => {

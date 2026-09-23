@@ -28,10 +28,9 @@ workflow are 3.1.3 and 2.101.0. Linux amd64 users can install those pins with
 on a runner). Other platforms need the matching upstream binaries.
 
 Use the verifier from an independently trusted checkout of SAG. Obtain `TAG`
-and `COMMIT` from an approved release change or a signed tag verified against
-maintained public-key trust. Neither comes from the downloaded manifest.
-Authenticating the manifest with the identity it supplies would trust the
-artefact to identify its own publisher.
+and `COMMIT` from the approved release change and its reviewed source commit.
+Neither comes from the downloaded manifest. Authenticating the manifest with
+the identity it supplies would trust the artefact to identify its own publisher.
 
 ```sh
 set -euo pipefail
@@ -62,8 +61,9 @@ exact certificate identity
 and OIDC issuer `https://token.actions.githubusercontent.com`. It invokes
 `gh attestation verify` for every file and the registry digest, requiring the
 same identity, source ref, source commit, signer commit, SLSA predicate type,
-and GitHub-hosted runners. It validates provenance subjects and the original
-run/attempt, then compares the exported envelopes with the verified bundles.
+a `workflow_dispatch` event at the release tag, and GitHub-hosted runners. It
+validates provenance subjects and the original run/attempt, then compares the
+exported envelopes with the verified bundles.
 Transparency-log verification remains enabled.
 
 GitHub CLI may require authentication to download releases, and private

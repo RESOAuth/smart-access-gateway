@@ -7,8 +7,9 @@ All notable changes to SAG are recorded here. Releases use semantic versions.
 ### Added
 
 - Signed container and source releases, with a verified release manifest,
-  GitHub build provenance, and a deployment verifier. Protected signed tags
-  now start the release workflow; it publishes the GitHub release after
+  GitHub build provenance, and a deployment verifier. Maintainers start
+  Prepare release in GitHub Actions; it creates the version tag and starts
+  the build/sign/verify workflow, which publishes the release after
   verification.
 
 ### Security

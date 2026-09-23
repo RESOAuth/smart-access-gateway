@@ -33,11 +33,24 @@ if (program === 'cosign') {
     if (endpoint.includes('/releases/assets/')) {
       const asset = state.release.assets.find(asset => String(asset.id) === endpoint.split('/').at(-1));
       save(); process.stdout.write(readFileSync(join(state.remote, asset.name)));
-    } else if (endpoint.includes('/releases?')) result([state.release ? [state.release] : []]);
+    } else if (endpoint.includes('/git/matching-refs/tags/')) result(state.refs || []);
+    else if (endpoint.endsWith('/git/refs') && flag('--method') === 'POST') {
+      const fields = Object.fromEntries(args.filter((_, index) => args[index - 1] === '-f').map(field => field.split('=')));
+      const ref = { ref: fields.ref, object: { type: 'commit', sha: fields.sha } };
+      if (state.refs?.some(existing => existing.ref === ref.ref)) fail('Ref already exists');
+      state.refs = [...(state.refs || []), ref];
+      result(ref);
+    } else if (endpoint.includes('event=workflow_dispatch')) result([{ workflow_runs: state.dispatchedRuns || [] }]);
+    else if (endpoint.includes('/releases?')) result([state.release ? [state.release] : []]);
     else if (endpoint.endsWith('/branches/main')) result({ protected: state.protected !== false });
     else if (endpoint.includes('/actions/workflows/')) result({ workflow_runs: [{ status: 'completed', conclusion: state.checkConclusion || 'success' }] });
     else if (endpoint.includes('/artifacts?')) result([{ artifacts: state.artifacts || [] }]);
     else fail(`Unhandled API ${endpoint}`);
+  } else if (args[0] === 'workflow' && args[1] === 'run') {
+    const tag = flag('--ref');
+    const ref = state.refs.find(ref => ref.ref === `refs/tags/${tag}`);
+    state.dispatchedRuns = [...(state.dispatchedRuns || []), { id: 34, head_sha: ref.object.sha, head_branch: tag }];
+    result('');
   } else if (args[0] === 'release') {
     switch (args[1]) {
       case 'create':

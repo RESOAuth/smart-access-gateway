@@ -104,7 +104,7 @@ export function envelopeFromBundle(bundle, subjects, manifest) {
   assert.deepEqual(definition.externalParameters.workflow, {
     repository: REPOSITORY_URL, path: WORKFLOW, ref: `refs/tags/${manifest.tag}`,
   }, 'Wrong provenance workflow');
-  assert.equal(definition.internalParameters.github.event_name, 'push', 'Wrong workflow event');
+  assert.equal(definition.internalParameters.github.event_name, 'workflow_dispatch', 'Wrong workflow event');
   assert.equal(definition.internalParameters.github.runner_environment, 'github-hosted', 'Untrusted runner');
   assert.deepEqual(definition.resolvedDependencies, [{
     uri: `git+${REPOSITORY_URL}@refs/tags/${manifest.tag}`, digest: { gitCommit: manifest.commit },

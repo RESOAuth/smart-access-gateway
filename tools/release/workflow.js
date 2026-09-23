@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { appendFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
@@ -25,35 +25,13 @@ const releaseForTag = () => {
   return matches[0];
 };
 
-function validateTag() {
+function validateSource(source) {
   assert.equal(process.env.GITHUB_REPOSITORY, REPOSITORY, 'Unexpected repository');
-  assert.equal(process.env.GITHUB_EVENT_NAME, 'push', 'Only tag pushes can release');
-  assert.equal(process.env.GITHUB_REF, `refs/tags/${tag}`, 'Wrong triggering ref');
   const parsed = version(tag);
-  assert.equal(command('git', ['cat-file', '-t', `refs/tags/${tag}`]).trim(), 'tag', 'An annotated signed tag is required');
-  const signedTag = command('git', ['cat-file', 'tag', `refs/tags/${tag}`]);
-  assert.equal(/^tag (.+)$/m.exec(signedTag)?.[1], tag, 'Signed tag name does not match ref');
-  const peeled = command('git', ['rev-parse', `refs/tags/${tag}^{commit}`]).trim();
-  expected(tag, peeled);
-  assert.equal(peeled, process.env.GITHUB_SHA, 'Tag moved from the triggering commit');
-  command('git', ['merge-base', '--is-ancestor', peeled, 'refs/remotes/origin/main']);
+  expected(tag, source);
+  command('git', ['merge-base', '--is-ancestor', source, 'refs/remotes/origin/main']);
   assert.equal(api('branches/main').protected, true, 'main must be protected');
-
-  const ssh = process.env.RELEASE_SSH_ALLOWED_SIGNERS?.trim();
-  const gpg = process.env.RELEASE_GPG_PUBLIC_KEYS?.trim();
-  assert(!!ssh !== !!gpg, 'Configure exactly one release-tag public-key trust variable');
-  const trust = mkdtempSync(join(tmpdir(), 'sag-tag-trust-'));
-  if (ssh) {
-    const allowed = join(trust, 'allowed_signers');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
-    writeFileSync(allowed, `${ssh}\n`, { mode: 0o600 });
-    command('git', ['-c', 'gpg.format=ssh', '-c', `gpg.ssh.allowedSignersFile=${allowed}`, 'verify-tag', `refs/tags/${tag}`]);
-  } else {
-    const env = { ...process.env, GNUPGHOME: trust };
-    command('gpg', ['--batch', '--import'], { env, input: gpg, stdio: ['pipe', 'pipe', 'inherit'] });
-    command('git', ['-c', 'gpg.format=openpgp', 'verify-tag', `refs/tags/${tag}`], { env });
-  }
-  command('git', ['checkout', '--detach', peeled]);
+  command('git', ['checkout', '--detach', source]);
   const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
   assert.equal(pkg.version, parsed.version, 'package.json does not match tag');
   const runtime = /export const VERSION = '([^']+)';/.exec(readFileSync('src/version.js', 'utf8'))?.[1];
@@ -65,9 +43,18 @@ function validateTag() {
 
   // A green rerun is required after any failed or cancelled run for this commit.
   for (const workflow of ['ci.yml', 'codeql.yml', 'scorecard.yml']) {
-    const runs = api(`actions/workflows/${workflow}/runs?head_sha=${peeled}&branch=main&event=push&per_page=1`).workflow_runs;
+    const runs = api(`actions/workflows/${workflow}/runs?head_sha=${source}&branch=main&event=push&per_page=1`).workflow_runs;
     assert(runs.length === 1 && runs[0].status === 'completed' && runs[0].conclusion === 'success', `${workflow} must pass on this main commit before tagging`);
   }
+}
+
+function validateTag() {
+  assert.equal(process.env.GITHUB_EVENT_NAME, 'workflow_dispatch', 'Only a dispatched tag can release');
+  assert.equal(process.env.GITHUB_REF, `refs/tags/${tag}`, 'Release must run at the requested tag');
+  version(tag);
+  const peeled = command('git', ['rev-parse', `refs/tags/${tag}^{commit}`]).trim();
+  assert.equal(peeled, process.env.GITHUB_SHA, 'Tag moved from the triggering commit');
+  validateSource(peeled);
   output('commit', peeled);
   const release = releaseForTag();
   output('published', !!release && !release.draft);
@@ -76,6 +63,37 @@ function validateTag() {
   assert(checkpoints.length <= 1 && !checkpoints.some(artifact => artifact.expired), 'Signing checkpoint missing or expired; do not rebuild this release');
   if (release?.draft) assert(checkpoints.length === 1, 'Existing draft requires this run\'s signing checkpoint');
   output('checkpoint', checkpoints[0]?.id || '');
+}
+
+function prepare(checkOnly = false) {
+  assert.equal(process.env.GITHUB_EVENT_NAME, 'workflow_dispatch', 'Preparation must be manually dispatched');
+  assert.equal(process.env.GITHUB_REF, 'refs/heads/main', 'Prepare release must run from main');
+  const source = process.env.GITHUB_SHA;
+  validateSource(source);
+  if (checkOnly) return;
+
+  const ref = `refs/tags/${tag}`;
+  const matching = api(`git/matching-refs/tags/${tag}`).filter(item => item.ref === ref);
+  assert(matching.length <= 1, 'Multiple matching release refs');
+  if (matching.length) {
+    assert.equal(matching[0].object.type, 'commit', 'Expected a workflow-created lightweight tag');
+    assert.equal(matching[0].object.sha, source, 'Existing tag points to a different commit');
+  } else {
+    api('git/refs', '--method', 'POST', '-f', `ref=${ref}`, '-f', `sha=${source}`);
+  }
+
+  // Tag writes with GITHUB_TOKEN do not trigger push workflows. Explicit
+  // dispatch does; keep the signer running at the tag for its OIDC identity.
+  const runs = JSON.parse(command('gh', ['api', '--paginate', '--slurp',
+    `repos/${REPOSITORY}/actions/workflows/release.yml/runs?event=workflow_dispatch&head_sha=${source}&per_page=100`,
+  ])).flatMap(page => page.workflow_runs);
+  const existing = runs.find(run => run.head_branch === tag && run.head_sha === source);
+  if (existing) {
+    console.log(`Release run already exists: ${REPOSITORY_URL}/actions/runs/${existing.id}. Rerun that run if it failed.`);
+    return;
+  }
+  command('gh', ['workflow', 'run', 'release.yml', '--repo', REPOSITORY, '--ref', tag]);
+  console.log(`Started Signed release for ${tag} at ${source}. Follow it in the repository's Actions tab.`);
 }
 
 function releaseNotes(releaseVersion) {
@@ -201,6 +219,8 @@ function publish() {
 const [operation, ...extra] = process.argv.slice(2);
 assert.equal(extra.length, 0, 'Unexpected arguments');
 switch (operation) {
+  case 'prepare-check': prepare(true); break;
+  case 'prepare': prepare(); break;
   case 'validate': validateTag(); break;
   case 'candidate': candidate(); break;
   case 'manifest': manifest(); break;
@@ -214,5 +234,5 @@ switch (operation) {
     verifyRelease(directory, tag, commit);
     break;
   }
-  default: throw new Error('Expected validate, candidate, manifest, export, stage, publish, or published');
+  default: throw new Error('Expected prepare-check, prepare, validate, candidate, manifest, export, stage, publish, or published');
 }

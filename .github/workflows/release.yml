@@ -1,8 +1,7 @@
 name: Signed release
 
 on:
-  push:
-    tags: ['v*']
+  workflow_dispatch:
 
 # Keep this workflow path stable: it is part of the public signing identity.
 concurrency:
@@ -35,12 +34,10 @@ jobs:
         with:
           node-version: '24'
       - uses: ./.github/actions/release-tools
-      - name: Validate signed tag, source, versions, changelog, and main checks
+      - name: Validate tag, source, versions, changelog, and main checks
         id: tag
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_SSH_ALLOWED_SIGNERS: ${{ vars.RELEASE_SSH_ALLOWED_SIGNERS }}
-          RELEASE_GPG_PUBLIC_KEYS: ${{ vars.RELEASE_GPG_PUBLIC_KEYS }}
         run: node tools/release/workflow.js validate
 
   checks:

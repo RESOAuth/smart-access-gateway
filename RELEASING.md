@@ -1,40 +1,46 @@
 # Releasing SAG
 
-Releases use semantic versions and signed annotated Git tags. Pushing a
-`vX.Y.Z` tag starts [release.yml](.github/workflows/release.yml), which builds,
-signs, verifies, and publishes the GitHub release. Keep that workflow path
-stable: it is part of the public certificate identity. The accepted design is
-[ADR 0020](docs/adr/0020-signed-releases.md).
+Releases are built, signed, verified, and published by GitHub Actions.
+Maintainers start **Prepare release** on `main` with a version tag such as
+`v0.3.0`. That workflow creates the tag and starts
+[release.yml](.github/workflows/release.yml) at the tag. Keep the signing
+workflow path stable: it is part of the public certificate identity.
+[ADR 0021](docs/adr/0021-github-operated-release-authorisation.md) supersedes
+the local signed-tag gate in ADR 0020.
 
 ## Repository setup
 
-Before the first signed release:
+Before merging the release workflows:
 
-1. Protect `main`, including reviews of workflow changes. Configure an active
-   tag ruleset for `v*`: restrict creation to release maintainers, restrict
-   updates, and restrict deletion. Do not give automation or routine
-   contributors permission to bypass these rules. If maintainers need a
-   creation bypass, use separate rulesets so that bypass cannot update or
-   delete existing tags. The workflow checks protected-main membership; tag
-   creation authorisation must be enforced by GitHub before the workflow runs.
-2. Configure exactly one Actions **repository variable**, containing public
-   material only:
+1. Protect `main`, including reviews of workflow changes. Treat repository
+   write access and permission to run Actions as release authority, and grant
+   them only to trusted maintainers. The preparation workflow accepts `main`
+   only; the signing workflow accepts the requested tag only. Both check the
+   source commit, versions, changelog, and successful checks on protected
+   `main`.
+2. Add an active tag ruleset for `v*` that restricts **updates and deletions**,
+   with no routine bypass. Tag creation must remain permitted for the
+   repository's `GITHUB_TOKEN`; do not enable a creation restriction that
+   blocks the preparation workflow. Existing conflicting tags are refused,
+   never moved or replaced.
+3. Allow the workflows' scoped `GITHUB_TOKEN` permissions. Preparation needs
+   `contents: write` to create a tag and `actions: write` to dispatch the
+   signing workflow. Signing needs package/attestation writes and
+   `id-token: write`; publication needs release/package writes. Grant this
+   repository Actions access to the GHCR `sag` package, make it public, and
+   retain its signature/provenance attachments.
 
-   | Variable | Value |
-   | --- | --- |
-   | `RELEASE_SSH_ALLOWED_SIGNERS` | OpenSSH allowed-signers entries, e.g. `release namespaces="git" ssh-ed25519 <public-key-base64>` |
-   | `RELEASE_GPG_PUBLIC_KEYS` | ASCII-armoured OpenPGP public release keys; an isolated keyring trusts only these keys |
+No release signing-key secret, personal access token, SSH key, GPG key, or
+public-key repository variable is required. The earlier draft's
+`RELEASE_SSH_ALLOWED_SIGNERS` and `RELEASE_GPG_PUBLIC_KEYS` variables are no
+longer used and can be removed if already configured.
 
-   Verify fingerprints out of band before adding keys. Keep private keys on
-   the maintainer's signing device. Remove revoked keys and review changes to
-   these variables as release-authority changes. Do not import keys by a
-   short key ID or trust every key listed on a GitHub profile. SSH and OpenPGP
-   tags are supported; the configured public trust must match the chosen
-   format.
-3. Allow GitHub Actions to write GHCR packages, GitHub attestations, and
-   releases with the per-job `GITHUB_TOKEN` permissions. Make the `sag` package
-   public for public verification and retain its OCI signature/attestation
-   attachments. Do not add a release signing-key secret.
+Cosign creates a temporary signing key on the GitHub runner. GitHub's OIDC
+token proves the workflow's identity to Sigstore, which issues a short-lived
+certificate for that key. Signatures and transparency evidence let consumers
+verify the artefacts after the temporary private key is gone. GitHub's
+attestation action supplies the corresponding build provenance. The Git tag
+itself is an unsigned version reference; the release artefacts are signed.
 
 Cosign 3.1.3 and GitHub CLI 2.101.0 are installed from checksum-pinned binaries
 on GitHub-hosted Ubuntu runners. All external actions are pinned to commit
@@ -46,10 +52,9 @@ SHAs. Update these pins together with verification tests when upgrading.
    publicly reported defects. Do not release with a confirmed exploitable
    vulnerability of medium or higher severity left unaddressed. This remains
    a maintainer review; a green workflow cannot replace it.
-2. Run `npm ci --ignore-scripts`, `npm run check`, `npm run lint`,
-   `npm run sast`, `npm run fuzz:release`, and `npm test` from a clean checkout.
-   Lint and SAST must finish without warnings, and fuzzing must report no
-   finding or crash.
+2. Prepare the release through reviewed changes in GitHub. CI runs syntax,
+   lint, SAST, fuzzing, and tests; the signing workflow repeats the full
+   release gates before building. No local build or signing is required.
 3. Prepare a dated `## 0.3.0 - YYYY-MM-DD` entry in
    [CHANGELOG.md](CHANGELOG.md), summarising user-visible changes and upgrade
    impact. Under `### Security`, name every fixed vulnerability which had a
@@ -61,16 +66,14 @@ SHAs. Update these pins together with verification tests when upgrading.
    runs to complete successfully. The release workflow requires their latest
    runs to be green and repeats syntax, lint, SAST, release fuzzing, and tests
    without signing or publication permissions.
-6. Create and push the signed tag from the approved commit:
-
-   ```sh
-   git tag -s v0.3.0 <approved-full-commit> -m 'SAG 0.3.0'
-   git push origin refs/tags/v0.3.0
-   ```
+6. In GitHub, open **Actions → Prepare release → Run workflow**, select
+   **main**, enter **v0.3.0**, and run it. The selected `main` commit is fixed
+   for that run. The workflow checks it, creates the tag, and dispatches
+   **Signed release** at that tag. Follow the second run in the Actions tab.
 
    Use `v0.3.0-rc.1` with matching version files and changelog for a prerelease.
    Build metadata (`+...`) is not supported because OCI tags cannot contain
-   it. Do not create or publish the GitHub release manually.
+   it. Do not create the tag or publish a GitHub release manually.
 7. Follow the Actions run. It archives the Git object, builds
    `ghcr.io/resoauth/sag:candidate-<run-id>`, signs the returned digest, and
    records the source/run metadata in a signed manifest. It retains the
@@ -92,8 +95,12 @@ SHAs. Update these pins together with verification tests when upgrading.
 ## Failure and recovery
 
 Signing, registry, attestation, or verification failure stops publication.
-Retry the original Actions run. A candidate already pushed under its run ID
-is reused by digest; a completed `signed-release` Actions artefact restores
+Retry the original **Signed release** Actions run. If preparation failed
+before dispatch, rerun **Prepare release**; it reuses an identical tag and
+starts signing only when no matching signing run already exists. If a signing
+run exists, preparation prints its URL instead of starting a new build. A
+candidate already pushed under its run ID is reused by digest; a completed
+`signed-release` Actions artefact restores
 exactly the same signed bytes, including the original signing attempt.
 Checkpoints are retained for 90 days. Upload retries compare existing bytes
 and upload only missing assets. Existing assets are never overwritten.
