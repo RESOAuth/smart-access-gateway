@@ -313,17 +313,17 @@ async function signIn(instance, agent, meta, { email, extra = {} } = {}) {
     if (!routedPage.includes('name="password"')) {
       throw new Error('the local account did not reach the password page (HTTP ' + routed.status + ')');
     }
-    const passwordResponse = await agent.form(new URL('/authorize/local-password', instance.issuer).toString(), {
+    const localResponse = await agent.form(new URL('/authorize/local-password', instance.issuer).toString(), {
       tx: field(routedPage, 'tx'),
       password: instance.auth.password,
     });
-    if (passwordResponse.status === 303) {
-      done = passwordResponse;
+    if (localResponse.status === 303) {
+      done = localResponse;
     } else {
-      if (!passwordResponse.ok) throw new Error('/authorize/local-password answered ' + passwordResponse.status);
-      const mfaPage = await passwordResponse.text();
+      if (!localResponse.ok) throw new Error('/authorize/local-password answered ' + localResponse.status);
+      const mfaPage = await localResponse.text();
       if (!mfaPage.includes('name="code"')) {
-        throw new Error('the local password did not complete or reach the verification-code page (HTTP ' + passwordResponse.status + ')');
+        throw new Error('the local password did not complete or reach the verification-code page (HTTP ' + localResponse.status + ')');
       }
       done = await submitLocalMfa(instance, agent, mfaPage);
     }
