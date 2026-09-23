@@ -212,8 +212,8 @@ async function submitLocalMfa(instance, agent, page) {
 
   const retryPage = await response.text();
   const retryTx = field(retryPage, 'tx');
-  if (!response.ok || !retryTx || !retryPage.includes('name="code"')) {
-    throw new Error('/authorize/local-mfa answered ' + response.status + ':\n' + retryPage.slice(0, 400));
+  if (response.status !== 400 || !retryTx || !retryPage.includes('name="code"')) {
+    throw new Error('/authorize/local-mfa did not redirect or return a retry form (HTTP ' + response.status + ')');
   }
 
   const retry = await nextLocalTotp(instance, generated.step);
@@ -237,9 +237,9 @@ async function verifyIdToken(token, { jwks, issuer, clientId, nonce }) {
   const claims = JSON.parse(Buffer.from(p, 'base64url').toString('utf8'));
 
   const params = JOSE[header.alg];
-  if (!params) throw new Error('unexpected id_token algorithm ' + header.alg);
+  if (!params) throw new Error('unexpected id_token algorithm');
   const jwk = jwks.keys.find((k) => k.kid === header.kid);
-  if (!jwk) throw new Error('the JWKS has no key with kid ' + header.kid);
+  if (!jwk) throw new Error('the JWKS has no key matching the id_token kid');
 
   const key = await crypto.subtle.importKey('jwk', { ...jwk, ext: true }, params.import, true, ['verify']);
   const ok = await crypto.subtle.verify(
@@ -251,7 +251,7 @@ async function verifyIdToken(token, { jwks, issuer, clientId, nonce }) {
   if (!ok) throw new Error('the id_token signature does not verify against the published JWKS');
 
   const now = Math.floor(Date.now() / 1000);
-  if (claims.iss !== issuer) throw new Error('iss is ' + claims.iss + ', expected ' + issuer);
+  if (claims.iss !== issuer) throw new Error('the id_token issuer does not match the instance');
   const aud = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
   if (!aud.includes(clientId)) throw new Error('aud does not include ' + clientId);
   if (claims.exp <= now) throw new Error('the id_token has already expired');
@@ -301,7 +301,7 @@ async function signIn(instance, agent, meta, { email, extra = {} } = {}) {
 
   const emailPage = await first.text();
   const tx = field(emailPage, 'tx');
-  if (!tx) throw new Error('the first page carried no transaction:\n' + emailPage.slice(0, 400));
+  if (!tx) throw new Error('the first page carried no transaction (HTTP ' + first.status + ')');
 
   const routed = await agent.form(new URL('/authorize/email', instance.issuer).toString(), { tx, email });
   if (!routed.ok) throw new Error('/authorize/email answered ' + routed.status);
@@ -311,25 +311,25 @@ async function signIn(instance, agent, meta, { email, extra = {} } = {}) {
 
   if (instance.auth) {
     if (!routedPage.includes('name="password"')) {
-      throw new Error('the local account did not reach the password page:\n' + routedPage.slice(0, 400));
+      throw new Error('the local account did not reach the password page (HTTP ' + routed.status + ')');
     }
-    const password = await agent.form(new URL('/authorize/local-password', instance.issuer).toString(), {
+    const passwordResponse = await agent.form(new URL('/authorize/local-password', instance.issuer).toString(), {
       tx: field(routedPage, 'tx'),
       password: instance.auth.password,
     });
-    if (password.status === 303) {
-      done = password;
+    if (passwordResponse.status === 303) {
+      done = passwordResponse;
     } else {
-      if (!password.ok) throw new Error('/authorize/local-password answered ' + password.status);
-      const mfaPage = await password.text();
+      if (!passwordResponse.ok) throw new Error('/authorize/local-password answered ' + passwordResponse.status);
+      const mfaPage = await passwordResponse.text();
       if (!mfaPage.includes('name="code"')) {
-        throw new Error('the local password did not complete or reach the verification-code page:\n' + mfaPage.slice(0, 400));
+        throw new Error('the local password did not complete or reach the verification-code page (HTTP ' + passwordResponse.status + ')');
       }
       done = await submitLocalMfa(instance, agent, mfaPage);
     }
   } else {
     code = devCode(routedPage);
-    if (!code) throw new Error('no development code on the code page:\n' + routedPage.slice(0, 400));
+    if (!code) throw new Error('no development code on the code page (HTTP ' + routed.status + ')');
     done = await agent.form(new URL('/authorize/otp', instance.issuer).toString(), {
       tx: field(routedPage, 'tx'),
       code,
@@ -338,7 +338,7 @@ async function signIn(instance, agent, meta, { email, extra = {} } = {}) {
   if (done.status !== 303) throw new Error('expected a redirect back to the client, got ' + done.status);
   const location = new URL(done.headers.get('location'));
   if (location.searchParams.get('error')) {
-    throw new Error('SAG refused: ' + location.searchParams.get('error_description'));
+    throw new Error('SAG returned an authorisation error');
   }
   if (location.searchParams.get('state') !== state) throw new Error('state did not come back intact');
   // RFC 9207, which is what tells a client the response came from the provider
@@ -376,13 +376,7 @@ async function checkStub(instance, email, agent = browser()) {
       continue;
     }
     if (!res.ok) {
-      // The stub renders what went wrong on its error page, and that sentence
-      // is the whole diagnosis - a bare status code is not.
-      const body = await res.text();
-      const reason = body.match(/<strong>Sign-in failed<\/strong><br>([^<]*)/)?.[1];
-      throw new Error(
-        'the stub or the instance answered ' + res.status + (reason ? ': ' + decodeEntities(reason) : '\n' + body.slice(0, 300)),
-      );
+      throw new Error('the stub sign-in answered ' + res.status);
     }
 
     const html = await res.text();
@@ -411,7 +405,7 @@ async function checkStub(instance, email, agent = browser()) {
       if (!html.includes(email)) throw new Error('the stub is signed in as somebody else');
       return;
     }
-    throw new Error('the stub stopped on a page this script does not recognise:\n' + html.slice(0, 400));
+    throw new Error('the stub stopped on a page this script does not recognise (HTTP ' + res.status + ')');
   }
   throw new Error('the stub never finished signing in');
 }
@@ -428,7 +422,7 @@ async function checkInstance(instance) {
   if (!healthRes.ok) throw new Error('/healthz answered ' + healthRes.status);
   const health = await healthRes.json();
   if (health.issuer !== instance.issuer) {
-    throw new Error('this instance calls itself ' + health.issuer + ', not ' + instance.issuer);
+    throw new Error('the health document issuer does not match the instance');
   }
   notes.push('signing ' + health.signing.primary.backend + ' / ' + health.signing.primary.alg);
   notes.push('clients ' + health.clients.store + (health.clients.static ? ' + ' + health.clients.static + ' static' : ''));
@@ -457,7 +451,7 @@ async function checkInstance(instance) {
 
   const metaRes = await fetch(instance.issuer + '/.well-known/openid-configuration');
   const meta = await metaRes.json();
-  if (meta.issuer !== instance.issuer) throw new Error('discovery calls this instance ' + meta.issuer);
+  if (meta.issuer !== instance.issuer) throw new Error('the discovery issuer does not match the instance');
   const jwks = await (await fetch(meta.jwks_uri)).json();
   if (!jwks.keys?.length) throw new Error('the JWKS is empty');
 
@@ -476,7 +470,7 @@ async function checkInstance(instance) {
     }),
   );
   const tokens = await tokenRes.json();
-  if (!tokenRes.ok) throw new Error('the token exchange failed: ' + (tokens.error_description || tokens.error));
+  if (!tokenRes.ok) throw new Error('the token exchange failed (HTTP ' + tokenRes.status + ')');
 
   const { header, claims } = await verifyIdToken(tokens.id_token, {
     jwks,
@@ -484,11 +478,11 @@ async function checkInstance(instance) {
     clientId: instance.clientId,
     nonce: first.nonce,
   });
-  if (claims.email !== email) throw new Error('the id_token is for ' + claims.email + ', not ' + email);
+  if (claims.email !== email) throw new Error('the id_token email does not match the sign-in address');
   if (instance.auth) {
     if ('email_verified' in claims) throw new Error('a local password asserted email_verified');
     const expectedAcr = instance.auth.totpSecret ? 'urn:sag:acr:local-mfa' : 'urn:sag:acr:local-password';
-    if (claims.acr !== expectedAcr) throw new Error('local acr is ' + claims.acr + ', expected ' + expectedAcr);
+    if (claims.acr !== expectedAcr) throw new Error('local acr does not match the authentication methods used');
     const expectedAmr = instance.auth.totpSecret ? ['pwd', 'otp', 'mfa'] : ['pwd'];
     for (const method of expectedAmr) {
       if (!claims.amr?.includes(method)) throw new Error('local amr does not include ' + method);
@@ -516,13 +510,13 @@ async function checkInstance(instance) {
     }),
   );
   if (replay.ok) throw new Error('the authorisation code was accepted twice: the state store is not doing its job');
-  notes.push('replay refused (' + (await replay.json()).error + ')');
+  notes.push('replay refused (HTTP ' + replay.status + ')');
 
   // --- The session survives, and prompt=none uses it -----------------------
   const silent = await signIn(instance, agent, meta, { email, extra: { prompt: 'none' } });
   if (!silent.silent) throw new Error('prompt=none showed a page instead of using the existing session');
   if (!silent.location.searchParams.get('code')) {
-    throw new Error('prompt=none answered ' + silent.location.searchParams.get('error') + ' rather than a code');
+    throw new Error('prompt=none did not return an authorisation code');
   }
   notes.push('prompt=none silent');
 
@@ -572,7 +566,7 @@ async function checkFederation(kidByName) {
     const others = present.filter((p) => p !== name);
     for (const other of others) {
       if (!kids.has(kidByName[other])) {
-        throw new Error(name + "'s /jwks.json does not carry " + other + "'s key (kid " + kidByName[other] + ')');
+        throw new Error(name + "'s /jwks.json does not carry " + other + "'s signing key");
       }
     }
     notes.push(name + ' vouches for ' + others.join(' and '));
@@ -602,7 +596,8 @@ for (const instance of chosen) {
   } catch (err) {
     failed += 1;
     console.log('  FAIL  ' + instance.name.padEnd(12) + instance.title);
-    console.log('        ' + String(err.message).split('\n').join('\n        '));
+    // JSON parse errors can include response text containing authentication data.
+    console.log('        ' + (err instanceof SyntaxError ? 'a response contained invalid JSON' : String(err.message)));
   }
   console.log('');
 }
@@ -618,7 +613,7 @@ try {
 } catch (err) {
   failed += 1;
   console.log('  FAIL  peer mesh     PEER_JWKS_URLS is not federating correctly');
-  console.log('        ' + String(err.message));
+  console.log('        ' + (err instanceof SyntaxError ? 'a response contained invalid JSON' : String(err.message)));
 }
 console.log('');
 
