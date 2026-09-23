@@ -53,6 +53,10 @@ itself is an unsigned version reference; the release artefacts are signed.
 Cosign 3.1.3 and GitHub CLI 2.101.0 are installed from checksum-pinned binaries
 on GitHub-hosted Ubuntu runners. All external actions are pinned to commit
 SHAs. Update these pins together with verification tests when upgrading.
+Release jobs check out the run's fixed event SHA directly; validation requires
+the version tag to resolve to that same commit on protected `main`. Automatic
+package-manager caching is disabled in the release and development publication
+workflows.
 
 ## Prepare and release
 
