@@ -235,6 +235,18 @@ Local authentication contexts do not silently satisfy federated contexts. A
 relying party which asks for `urn:sag:acr:federated` still requires an upstream
 sign-in even when the local record has TOTP.
 
+To accept either local or federated MFA, request `urn:sag:acr:mfa`. Local
+password plus TOTP or a backup code satisfies that requirement and still
+returns `urn:sag:acr:local-mfa`, without `email_verified`. A password alone
+cannot satisfy it.
+
+The password page supplies the selected username and `current-password`
+autocomplete hints. The MFA page gives authenticator codes a numeric keypad
+and `one-time-code` autocomplete; backup codes have a separate text field
+under **Use a backup code**, so their letters and hyphens remain enterable.
+Both forms work without JavaScript. Codes are submitted explicitly, because
+six digits may be only the prefix of a configured eight-digit TOTP.
+
 ## Disable, replace, back up, and restore
 
 SAG checks authoritative local state when it reuses a session and when an

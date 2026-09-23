@@ -106,12 +106,13 @@ test('an instance with no upstream provider does not advertise federation', asyn
     'urn:sag:acr:email-otp',
     'urn:sag:acr:federated',
     'urn:sag:acr:federated-mfa',
+    'urn:sag:acr:mfa',
   ]);
 });
 
 test('an instance with email codes switched off advertises only federation', async () => {
   const { body } = await openid(createInstance({ ...UPSTREAM, OTP_ENABLED: 'false' }));
-  assert.deepEqual(body.acr_values_supported, ['urn:sag:acr:federated', 'urn:sag:acr:federated-mfa']);
+  assert.deepEqual(body.acr_values_supported, ['urn:sag:acr:federated', 'urn:sag:acr:federated-mfa', 'urn:sag:acr:mfa']);
 });
 
 test('profile is not offered when nothing could ever fill it', async () => {

@@ -7,6 +7,7 @@ export const ACR = {
   LOCAL_MFA: 'urn:sag:acr:local-mfa',
   FEDERATED: 'urn:sag:acr:federated',
   FEDERATED_MFA: 'urn:sag:acr:federated-mfa',
+  MFA: 'urn:sag:acr:mfa',
 };
 
 /** Ordered weakest to strongest. A stronger authentication satisfies a weaker demand. */
@@ -88,6 +89,9 @@ export function satisfies(held, requested) {
   const local = held === ACR.LOCAL_PASSWORD || held === ACR.LOCAL_MFA;
   const heldStrength = strengthOf(held);
   return requested.some((want) => {
+    // This request leaves the authentication method open; the held context
+    // still records which method actually established MFA.
+    if (want === ACR.MFA) return held === ACR.LOCAL_MFA || held === ACR.FEDERATED_MFA;
     if (want === held) return true;
     // Authentication method is part of these names. A high-assurance local
     // sign-in must not silently satisfy a demand specifically for federation,
@@ -103,7 +107,9 @@ export function satisfies(held, requested) {
 /** The weakest method that could satisfy the request, for routing decisions. */
 export function minimumStrengthRequired(requested) {
   if (!requested || requested.length === 0) return 0;
-  const known = requested.map(strengthOf).filter((s) => s > 0);
+  const known = requested
+    .map((want) => strengthOf(want === ACR.MFA ? ACR.FEDERATED_MFA : want))
+    .filter((s) => s > 0);
   return known.length ? Math.min(...known) : Infinity;
 }
 

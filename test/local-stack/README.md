@@ -150,7 +150,8 @@ pip3 install --user --break-system-packages -U podman-compose
 For each instance, as a browser: discovery, the JWKS, the email screen, the
 configured authentication screens, the redirect back, the token exchange, and
 the `id_token` verified against the key that instance publishes. The local
-flow checks its `acr` and `amr`, and confirms that neither the ID token nor
+flow requests `urn:sag:acr:mfa`, checks the method-specific `acr` and `amr`,
+and confirms that neither the ID token nor
 `/userinfo` claims the address is verified merely because its password and
 TOTP were accepted. Then the three things only a real platform can answer:
 

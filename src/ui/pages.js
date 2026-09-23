@@ -119,10 +119,12 @@ export function localPasswordPage(ctx, { tx, email, error, action, changeAction,
       ${errorBlock(error?.title, error?.detail)}
       <form method="post" action="${e(action)}">
         ${hiddenFields({ tx })}
+        <input type="hidden" name="username" autocomplete="username" value="${e(email)}">
         <div class="field">
           <label for="password">Password</label>
           <input id="password" name="password" type="password"
-                 autocomplete="current-password" maxlength="${e(maxLength)}" required
+                 autocomplete="current-password" autocapitalize="none" autocorrect="off"
+                 spellcheck="false" maxlength="${e(maxLength)}" required
                  ${error ? 'aria-invalid="true"' : ''}>
         </div>
         <button type="submit" data-busy-label="Signing in...">Sign in</button>
@@ -141,19 +143,37 @@ export function localPasswordPage(ctx, { tx, email, error, action, changeAction,
 export function localMfaPage(ctx, { tx, email, error, action, changeAction, clientLogoUri, clientLogoAlt, legal }) {
   const body = `
       <h1>Enter a verification code</h1>
-      <p class="lede">Use an authenticator code for <strong>${e(email)}</strong>, or enter one of your backup codes.</p>
+      <p class="lede">Use an authenticator code for <strong>${e(email)}</strong>.</p>
       ${errorBlock(error?.title, error?.detail)}
       <form method="post" action="${e(action)}">
         ${hiddenFields({ tx })}
         <div class="field">
-          <label for="code">Verification code</label>
-          <input id="code" name="code" type="text" class="code"
-                 inputmode="text" autocomplete="one-time-code" autocapitalize="characters"
-                 autocorrect="off" spellcheck="false" maxlength="64" required
+          <label for="totp">Authenticator code</label>
+          <span class="hint" id="totp-hint">Enter the 6- or 8-digit code from your authenticator app.</span>
+          <input id="totp" name="code" type="text" class="code otp-input totp-input"
+                 inputmode="numeric" autocomplete="one-time-code" autocapitalize="none"
+                 autocorrect="off" spellcheck="false" pattern="[0-9 \\-]*"
+                 placeholder="123456" minlength="6" maxlength="64" aria-describedby="totp-hint" required
                  ${error ? 'aria-invalid="true"' : ''}>
         </div>
         <button type="submit" data-busy-label="Verifying...">Verify</button>
       </form>
+      <details class="recovery"${error ? ' open' : ''}>
+        <summary>Use a backup code</summary>
+        <form method="post" action="${e(action)}">
+          ${hiddenFields({ tx })}
+          <div class="field">
+            <label for="backup-code">Backup code</label>
+            <span class="hint" id="backup-code-hint">Enter one of your single-use backup codes, including its hyphens.</span>
+            <input id="backup-code" name="code" type="text" class="code backup-code"
+                   inputmode="text" autocomplete="off" autocapitalize="characters"
+                   autocorrect="off" spellcheck="false" maxlength="64"
+                   aria-describedby="backup-code-hint" required
+                   ${error ? 'aria-invalid="true"' : ''}>
+          </div>
+          <button type="submit" data-busy-label="Verifying...">Verify backup code</button>
+        </form>
+      </details>
       <div class="also">
         <form method="post" action="${e(changeAction)}">
           ${hiddenFields({ tx })}

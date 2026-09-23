@@ -10,8 +10,44 @@ import assert from 'node:assert/strict';
 import { createInstance, pkce, authorizeUrl, extractField, signInWithOtp, DEV_CLIENT, DEV_REDIRECT } from './harness.js';
 import { DEFAULT_CSS } from '../src/ui/css.js';
 import { DEFAULT_JS } from '../src/ui/js.js';
+import { loadConfig } from '../src/config.js';
+import { localIdentityKey } from '../src/local-identities/index.js';
 
 const EMAIL = 'person@example.org';
+
+async function localScreens() {
+  const verifier = '$argon2id$v=19$m=65536,t=3,p=1$c2FnLWxvY2FsLWR1bW15MQ$KffQgtYBtmwZAFnvnsXZ7vL8/HU8Mz58bkyIR3r/krU';
+  let key;
+  let record = {
+    v: 1, id: 'ui-local-account', revision: 1, security_version: 1,
+    password: verifier, totp: [], backup_codes: [{ id: 'BACKUP', hash: verifier }], upstreams: [],
+  };
+  const sag = createInstance({
+    SUBJECT_SALT: 'ui-local-subject-salt-'.repeat(2),
+    STATE_STORE_BACKEND: 'memory',
+    LOCAL_IDENTITIES_BACKEND: 'file',
+    LOCAL_IDENTITY_DOMAINS: 'example.org',
+    SAG_LOCAL_IDENTITIES: {
+      get: async (requested) => requested === key ? record : undefined,
+      replace: async (requested, revision, next) => {
+        assert.equal(requested, key);
+        assert.equal(revision, record.revision);
+        record = next;
+        return true;
+      },
+      verifyArgon2id: async (_hash, value) => ['test password', 'BACKUP-EXAMPLE'].includes(value),
+    },
+  });
+  key = await localIdentityKey(loadConfig(sag.env), EMAIL);
+  const first = await emailScreen(sag);
+  const password = await sag.postForm('/authorize/email', { tx: extractField(first.html), email: EMAIL });
+  const passwordHtml = await password.text();
+  const mfa = await sag.postForm('/authorize/local-password', {
+    tx: extractField(passwordHtml), password: 'test password', username: 'not-the-account@example.org',
+  });
+  assert.equal(mfa.status, 200);
+  return { sag, passwordHtml, mfaHtml: await mfa.text() };
+}
 
 /** Fetch the first screen of a flow. */
 async function emailScreen(sag, extra = {}) {
@@ -195,6 +231,65 @@ test('nothing steals focus on load', async () => {
   const sag = createInstance();
   assert.ok(!/autofocus/i.test((await emailScreen(sag)).html));
   assert.ok(!/autofocus/i.test((await otpScreen(sag)).html));
+});
+
+test('the local password step carries username context and shares all text-field styles', async () => {
+  const { passwordHtml } = await localScreens();
+  assert.match(passwordHtml, /<input type="hidden" name="username" autocomplete="username" value="person@example.org">/);
+  assert.match(passwordHtml, /<label for="password">Password<\/label>/);
+  const password = passwordHtml.match(/<input id="password"[^>]+>/)[0];
+  assert.match(password, /type="password"/);
+  assert.match(password, /autocomplete="current-password"/);
+  assert.match(password, /autocapitalize="none"/);
+  assert.match(password, /autocorrect="off"/);
+  assert.match(password, /spellcheck="false"/);
+  assert.doesNotMatch(password, /\svalue=/, 'never echo a submitted password');
+  for (const state of ['', ':hover', ':focus']) {
+    const rule = DEFAULT_CSS.split('}').find((part) => part.includes('input[type="password"]' + state + ' {'));
+    assert.ok(rule, 'password styling for ' + (state || 'default'));
+    assert.ok(rule.includes('input[type="email"]' + state));
+    assert.ok(rule.includes('input[type="text"]' + state));
+  }
+  assert.deepEqual(scriptDependencies(passwordHtml), []);
+  assert.doesNotMatch(passwordHtml, /autofocus/i);
+});
+
+test('local MFA distinguishes numeric authenticator autofill from text backup codes', async () => {
+  const { sag, mfaHtml } = await localScreens();
+  assert.match(mfaHtml, /<label for="totp">Authenticator code<\/label>/);
+  const totp = mfaHtml.match(/<input id="totp"[^>]+>/)[0];
+  assert.match(totp, /name="code" type="text" class="code otp-input totp-input"/);
+  assert.match(totp, /inputmode="numeric"/);
+  assert.match(totp, /autocomplete="one-time-code"/);
+  assert.match(totp, /aria-describedby="totp-hint"/);
+  assert.match(mfaHtml, /id="totp-hint">Enter the 6- or 8-digit code/);
+  assert.match(totp, /placeholder="123456"/);
+  assert.doesNotMatch(totp, /data-length/, 'do not submit a six-digit prefix of an eight-digit code');
+  const pattern = new RegExp('^(?:' + totp.match(/pattern="([^"]+)"/)[1] + ')$', 'v');
+  for (const value of ['012345', '01234567', '012 345', '0123-4567']) assert.ok(pattern.test(value));
+  assert.equal(pattern.test('BACKUP-EXAMPLE'), false);
+
+  const forms = [...mfaHtml.matchAll(/<form\b[^>]+action="\/authorize\/local-mfa"[^>]*>([\s\S]*?)<\/form>/g)];
+  assert.equal(forms.length, 2, 'each factor has a separately submittable form');
+  assert.equal(extractField(forms[0][1]), extractField(forms[1][1]));
+  for (const form of forms) assert.equal((form[1].match(/name="code"/g) || []).length, 1);
+  const backup = mfaHtml.match(/<input id="backup-code"[^>]+>/)[0];
+  assert.match(backup, /inputmode="text"/);
+  assert.match(backup, /autocomplete="off"/);
+  assert.match(backup, /aria-describedby="backup-code-hint"/);
+  assert.doesNotMatch(backup, /pattern=|data-length/, 'backup codes retain letters and hyphens');
+  assert.match(mfaHtml, /<details class="recovery">\s*<summary>Use a backup code<\/summary>/);
+  assert.deepEqual(scriptDependencies(mfaHtml), []);
+  assert.doesNotMatch(mfaHtml, /autofocus/i);
+
+  const rejected = await sag.postForm('/authorize/local-mfa', { tx: extractField(forms[1][1]), code: 'WRONG-CODE' });
+  assert.equal(rejected.status, 400);
+  const retry = await rejected.text();
+  assert.match(retry, /<details class="recovery" open>/, 'a recovery retry stays visible without JavaScript');
+  assert.match(retry, /aria-invalid="true"/);
+  assert.doesNotMatch(retry, /value="WRONG-CODE"/);
+  const completed = await sag.postForm('/authorize/local-mfa', { tx: extractField(retry), code: 'BACKUP-EXAMPLE' });
+  assert.equal(completed.status, 303, 'the backup form works without any JavaScript');
 });
 
 test('an error is announced and tied to the field it refers to', async () => {

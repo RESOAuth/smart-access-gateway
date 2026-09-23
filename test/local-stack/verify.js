@@ -286,6 +286,7 @@ async function signIn(instance, agent, meta, { email, extra = {} } = {}) {
     nonce,
     code_challenge: challenge,
     code_challenge_method: 'S256',
+    ...(instance.auth?.totpSecret ? { acr_values: 'urn:sag:acr:mfa' } : {}),
     ...extra,
   })) {
     url.searchParams.set(k, v);

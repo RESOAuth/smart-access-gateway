@@ -29,10 +29,10 @@ import { mergeJwks, isPeerFetch } from '../keys/peers.js';
 const CORE_CLAIMS = ['iss', 'sub', 'aud', 'exp', 'iat', 'auth_time', 'nonce', 'acr', 'amr', 'sid'];
 
 /**
- * Which authentication contexts this instance could actually assert.
+ * Which authentication context requests this instance could actually satisfy.
  *
  * A relying party uses this to decide whether demanding one is worth doing, so
- * naming a context nothing here can produce is worse than saying nothing.
+ * naming a requirement nothing here can satisfy is worse than saying nothing.
  */
 function acrValuesFor(config) {
   const values = [];
@@ -41,6 +41,7 @@ function acrValuesFor(config) {
     values.push(ACR.LOCAL_PASSWORD, ACR.LOCAL_MFA);
   }
   if (config.upstreams.length > 0) values.push(ACR.FEDERATED, ACR.FEDERATED_MFA);
+  if (values.includes(ACR.LOCAL_MFA) || values.includes(ACR.FEDERATED_MFA)) values.push(ACR.MFA);
   return values;
 }
 

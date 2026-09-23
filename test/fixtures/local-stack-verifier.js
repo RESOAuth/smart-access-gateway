@@ -40,6 +40,7 @@ globalThis.fetch = async (input, init = {}) => {
     case '/jwks.json':
       return Response.json({ keys: [{ kid: 'test-key' }] });
     case '/authorize':
+      assert.equal(url.searchParams.get('acr_values'), 'urn:sag:acr:mfa');
       authorisation = url;
       return new Response(transaction + '<input name="email">');
     case '/authorize/email':

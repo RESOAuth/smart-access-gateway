@@ -257,14 +257,48 @@ test('an incompatible ACR request cannot turn the local flow into a password-con
     assert.doesNotMatch(correct.body, /one-time code/i, 'MFA availability must not be disclosed either');
   }
 
-  const passwordOnly = localAuthenticationInstance();
-  const impossibleStepUp = await submitLocalPassword(passwordOnly, {
-    acr: ACR.LOCAL_MFA,
+  for (const acr of [ACR.LOCAL_MFA, ACR.MFA]) {
+    const passwordOnly = localAuthenticationInstance();
+    const impossibleStepUp = await submitLocalPassword(passwordOnly, {
+      acr,
+      password: 'correct horse battery staple',
+    });
+    assert.equal(impossibleStepUp.response.status, 400);
+    assert.match(impossibleStepUp.body, /We could not sign you in/);
+    assert.match(impossibleStepUp.body, /name="password"/);
+  }
+});
+
+test('local password and a recovery code satisfy generic MFA while retaining the local acr', async () => {
+  const sag = localAuthenticationInstance({ secondFactor: true });
+  const first = await submitLocalPassword(sag, {
+    acr: ACR.MFA,
     password: 'correct horse battery staple',
   });
-  assert.equal(impossibleStepUp.response.status, 400);
-  assert.match(impossibleStepUp.body, /We could not sign you in/);
-  assert.match(impossibleStepUp.body, /name="password"/);
+  assert.equal(first.response.status, 200);
+  assert.match(first.body, /Verification code/);
+
+  const completed = await sag.postForm('/authorize/local-mfa', {
+    tx: extractField(first.body),
+    code: 'RECOVERY-ABCD-EFGH',
+  });
+  assert.equal(completed.status, 303);
+  const tokens = await redeem(sag, {
+    authCode: new URL(completed.headers.get('location')).searchParams.get('code'),
+    verifier: first.verifier,
+  });
+  assert.equal(tokens.res.status, 200);
+  const claims = decodeJwt(tokens.body.id_token).payload;
+  assert.equal(claims.acr, ACR.LOCAL_MFA);
+  assert.deepEqual(claims.amr, [AMR.PASSWORD, AMR.RECOVERY, AMR.MFA]);
+  assert.equal(Object.hasOwn(claims, 'email_verified'), false);
+
+  const { challenge } = await pkce();
+  const silent = await sag.raw(authorizeUrl({ challenge, acr_values: ACR.MFA, prompt: 'none' }).path);
+  assert.equal(silent.status, 303);
+  const location = new URL(silent.headers.get('location'));
+  assert.ok(location.searchParams.get('code'));
+  assert.equal(location.searchParams.has('error'), false);
 });
 
 test('password-only and recovery-code local sign-ins complete with unverified email', async () => {
@@ -445,6 +479,7 @@ test('local discovery and password alternatives describe what the instance can a
   assert.equal(metadata.res.status, 200);
   assert.ok(metadata.body.acr_values_supported.includes(ACR.LOCAL_PASSWORD));
   assert.ok(metadata.body.acr_values_supported.includes(ACR.LOCAL_MFA));
+  assert.ok(metadata.body.acr_values_supported.includes(ACR.MFA));
   assert.ok(metadata.body.claims_supported.includes('name'));
 
   const withUpstream = localAuthenticationInstance({ upstream: true });

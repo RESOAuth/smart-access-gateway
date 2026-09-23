@@ -159,7 +159,7 @@ label { display: block; margin-bottom: 0.375rem; font-weight: 600; }
   font-weight: 400;
 }
 
-input[type="email"], input[type="text"] {
+input[type="email"], input[type="text"], input[type="password"] {
   display: block;
   width: 100%;
   padding: 0.6875rem 0.8125rem;
@@ -170,8 +170,8 @@ input[type="email"], input[type="text"] {
   border-radius: var(--radius-sm);
   transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
-input[type="email"]:hover, input[type="text"]:hover { border-color: var(--ink-faint); }
-input[type="email"]:focus, input[type="text"]:focus { border-color: var(--accent); }
+input[type="email"]:hover, input[type="text"]:hover, input[type="password"]:hover { border-color: var(--ink-faint); }
+input[type="email"]:focus, input[type="text"]:focus, input[type="password"]:focus { border-color: var(--accent); }
 input[aria-invalid="true"] { border-color: var(--error); }
 
 .remember-me {
@@ -194,6 +194,11 @@ input.code {
   text-align: center;
   padding: 0.6875rem 0.5rem;
 }
+
+input.backup-code { font-size: 1rem; letter-spacing: 0.05em; text-indent: 0; }
+.recovery { margin-top: 1.5rem; }
+.recovery summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+.recovery[open] summary { margin-bottom: 1rem; }
 
 button, .button {
   display: block;

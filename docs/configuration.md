@@ -335,7 +335,7 @@ See [upstreams.md](upstreams.md).
 | `ACR_DEFAULT_REQUIRED` | - | A floor for every relying party, applied whether or not they ask |
 
 The values SAG understands. Email/federated strength runs from weakest to
-strongest; the local family is compared only with itself:
+strongest; explicitly requested local methods stay within the local family:
 
 ``` ascii
 urn:sag:acr:email-otp        a code sent to an address
@@ -343,12 +343,21 @@ urn:sag:acr:local-password   an operator-provisioned local password
 urn:sag:acr:local-mfa        a local password and TOTP or backup code
 urn:sag:acr:federated        an upstream identity provider
 urn:sag:acr:federated-mfa    the upstream reported multi-factor
+urn:sag:acr:mfa              either local-mfa or federated-mfa, as a requirement
 ```
 
 The local values form their own family: `local-mfa` satisfies
 `local-password`, but neither local value silently satisfies a federated one,
 and federation does not stand in for a specifically requested local sign-in.
 
-A request that asks for more than the sign-in achieved is refused with
-`unmet_authentication_requirements` rather than quietly answered with
-something weaker.
+`urn:sag:acr:mfa` is a method-neutral requirement. Only `local-mfa` or
+`federated-mfa` satisfies it; email OTP, a local password alone, and federation
+without MFA do not. Issued tokens retain the actual method-specific `acr`,
+not the generic requirement. Local MFA still does not verify an email address.
+See [ADR 0024](adr/0024-method-neutral-mfa-requirement.md).
+
+A request that asks for more than the sign-in achieved is refused rather
+than quietly answered with something weaker. Upstream failures use
+`unmet_authentication_requirements`; the local password form keeps the same
+generic credential error so an impossible requirement cannot reveal whether
+a password was correct.
