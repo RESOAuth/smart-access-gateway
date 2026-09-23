@@ -206,7 +206,7 @@ test('every input has a real label and helpful autocomplete', async () => {
   assert.match(email, /<label for="email">Email address<\/label>/);
   assert.match(email, /<input id="email" name="email" type="email"/);
   assert.match(email, /inputmode="email"/);
-  assert.match(email, /autocomplete="username email"/);
+  assert.match(email, /autocomplete="username"/);
   assert.match(email, /spellcheck="false"/, 'an address is not a misspelling');
   assert.match(email, /\srequired\s/);
 

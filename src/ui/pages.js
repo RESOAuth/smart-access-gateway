@@ -26,7 +26,7 @@ export function emailPage(ctx, { tx, email, rememberMe, error, clientName, clien
         <div class="field">
           <label for="email">Email address</label>
           <input id="email" name="email" type="email" inputmode="email"
-                 autocomplete="username email" spellcheck="false"
+                 autocomplete="username" spellcheck="false"
                  required value="${e(email || '')}"
                  ${error ? 'aria-invalid="true"' : ''}>
         </div>
