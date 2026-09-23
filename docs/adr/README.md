@@ -45,3 +45,4 @@ decision here leaves open.
 | [0019](0019-a-common-upstream-must-bound-what-it-may-assert.md) | A `common` upstream bounds the tenants it accepts, or asks Entra whether the address is domain-verified |
 | [0020](0020-signed-releases.md) | Signed releases bind artefacts to the approved source, tag, and release workflow |
 | [0021](0021-github-operated-release-authorisation.md) | GitHub creates release tags and dispatches keyless signing without a local signing key |
+| [0022](0022-signed-development-images.md) | Development images are signed and verified under a separate main workflow identity |

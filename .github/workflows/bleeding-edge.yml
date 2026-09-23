@@ -1,8 +1,6 @@
 name: Bleeding-edge image
 
-# Every push to main that changes something buildable replaces the
-# `bleeding-edge` tag in GHCR, so there is always a runnable image of
-# main without waiting for a release.
+# Keep this path stable: it is part of the development signing identity.
 on:
   push:
     branches: [main]
@@ -19,12 +17,71 @@ permissions:
   contents: read
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: sag
+  IMAGE: ghcr.io/resoauth/sag
+  GH_TOKEN: ${{ github.token }}
 
 jobs:
-  build-and-push:
-    runs-on: ubuntu-latest
+  build-and-sign:
+    if: github.repository == 'RESOAuth/smart-access-gateway'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/release-tools
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
+        id: meta
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=bleeding-edge
+            type=sha,prefix=bleeding-edge-,format=short
+
+      - name: Build and push candidate
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          tags: ${{ env.IMAGE }}:bleeding-edge-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Sign the candidate digest
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${IMAGE_DIGEST}"
+
+      - name: Attest the candidate digest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+  publish:
+    needs: build-and-sign
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -32,33 +89,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-
-      # GHCR requires a lowercase repository path; the org name is not.
-      - name: Set image repository
-        run: |
-          echo "IMAGE_REPOSITORY=${REGISTRY}/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/${IMAGE_NAME}" >> "$GITHUB_ENV"
-
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '24'
+      - uses: ./.github/actions/release-tools
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
-
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
-        id: meta
-        with:
-          images: ${{ env.IMAGE_REPOSITORY }}
-          tags: |
-            type=raw,value=bleeding-edge
-            type=sha,prefix=bleeding-edge-,format=short
-
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          provenance: mode=max
-          sbom: true
+          password: ${{ github.token }}
+      - name: Verify from GHCR before updating development tags
+        env:
+          IMAGE_DIGEST: ${{ needs.build-and-sign.outputs.digest }}
+        run: node tools/release/bleeding-edge.js publish "$IMAGE_DIGEST" "$GITHUB_SHA"

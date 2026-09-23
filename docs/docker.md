@@ -132,8 +132,12 @@ instead. See [state-and-limits.md](state-and-limits.md).
 CI publishes images to GHCR, so a fork or a production deployment does not
 have to build one: `ghcr.io/resoauth/sag:latest` tracks the latest release,
 and `ghcr.io/resoauth/sag:bleeding-edge` tracks `main` after every push that
-touches something buildable. Point `docker-compose.yml`'s `image:` at one of
-these instead of `build: .` to use it.
+touches something buildable. Both channels sign their image digests through
+GitHub Actions. The development tags move only after their signatures and
+provenance verify. Follow the [verification instructions](release-verification.md),
+using the separate development-image gate for `bleeding-edge`, and set
+`docker-compose.yml`'s `image:` to the verified `ghcr.io/resoauth/sag@sha256:…`
+reference instead of `build: .`. Ordinary image pulls do not verify signatures.
 
 ## Upgrading
 

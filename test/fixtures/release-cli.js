@@ -18,6 +18,7 @@ if (program === 'cosign') {
   else {
     if (!args.includes('--certificate-identity') || !args.includes('--certificate-oidc-issuer')) fail('Missing signature policy');
     if (flag('--certificate-identity') !== state.identity) fail('Wrong certificate identity');
+    if (args.includes('--certificate-github-workflow-sha') && flag('--certificate-github-workflow-sha') !== state.commit) fail('Wrong signature source');
     result('{}');
   }
 } else if (program === 'gh') {
@@ -27,6 +28,7 @@ if (program === 'cosign') {
       if (!args.includes(required)) fail(`Missing policy: ${required}`);
     }
     if (flag('--cert-identity') !== state.identity || flag('--source-digest') !== state.commit) fail('Wrong attestation policy');
+    if (state.sourceRef && flag('--source-ref') !== state.sourceRef) fail('Wrong source ref');
     result('{}');
   } else if (args[0] === 'api') {
     const endpoint = args.find(arg => arg.startsWith('repos/'));
@@ -79,7 +81,7 @@ if (program === 'cosign') {
     if (!digest) fail('manifest unknown');
     result(digest);
   } else if (args[2] === 'create') {
-    state.images[flag('--tag')] = args.at(-1).split('@')[1];
+    state.images[flag('--tag')] = state.promotedDigest || args.at(-1).split('@')[1];
     result('');
   } else fail('Unhandled docker command');
 } else fail('Unhandled program');

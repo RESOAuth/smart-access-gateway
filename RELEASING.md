@@ -8,6 +8,13 @@ workflow path stable: it is part of the public certificate identity.
 [ADR 0021](docs/adr/0021-github-operated-release-authorisation.md) supersedes
 the local signed-tag gate in ADR 0020.
 
+Development images sign automatically on buildable pushes to `main` through
+[bleeding-edge.yml](.github/workflows/bleeding-edge.yml). They use the same
+keyless tools and registry permissions, with a separate workflow identity.
+The workflow verifies the candidate before updating development tags; no
+version bump, release changelog entry, or manual release is required. See the
+[development verification instructions](docs/release-verification.md#development-images-from-main).
+
 ## Repository setup
 
 Before merging the release workflows:
@@ -23,7 +30,8 @@ Before merging the release workflows:
    repository's `GITHUB_TOKEN`; do not enable a creation restriction that
    blocks the preparation workflow. Existing conflicting tags are refused,
    never moved or replaced.
-3. Allow the workflows' scoped `GITHUB_TOKEN` permissions. Preparation needs
+3. Allow the workflows' scoped `GITHUB_TOKEN` permissions, including the
+   automatic development-image workflow. Preparation needs
    `contents: write` to create a tag and `actions: write` to dispatch the
    signing workflow. Signing needs package/attestation writes and
    `id-token: write`; publication needs release/package writes. Grant this

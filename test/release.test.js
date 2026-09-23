@@ -14,6 +14,7 @@ const COMMIT = 'a'.repeat(40);
 const DIGEST = `sha256:${'b'.repeat(64)}`;
 const workflowScript = resolve('tools/release/workflow.js');
 const verifyScript = resolve('tools/release/verify.js');
+const bleedingEdgeScript = resolve('tools/release/bleeding-edge.js');
 const cliFixture = resolve('test/fixtures/release-cli.js');
 const policy = expected(TAG, COMMIT);
 
@@ -78,6 +79,93 @@ function fixture(t) {
 
 function passes(result) { assert.equal(result.status, 0, result.stderr); }
 function fails(result, pattern) { assert.notEqual(result.status, 0); if (pattern) assert.match(result.stderr, pattern); }
+
+function bleedingEdgeFixture(t) {
+  const f = fixture(t);
+  f.update(s => {
+    s.identity = `${REPOSITORY_URL}/.github/workflows/bleeding-edge.yml@refs/heads/main`;
+    s.sourceRef = 'refs/heads/main';
+  });
+  f.env.GITHUB_EVENT_NAME = 'push';
+  f.env.GITHUB_REF = 'refs/heads/main';
+  const run = (operation, digest = DIGEST, commit = COMMIT) => spawnSync(process.execPath,
+    [bleedingEdgeScript, operation, digest, commit], { cwd: f.root, env: f.env, encoding: 'utf8' });
+  return { ...f, run };
+}
+
+test('bleeding-edge verification requires its own workflow, main source, and exact digest', t => {
+  const f = bleedingEdgeFixture(t);
+  passes(f.run('verify'));
+  const calls = f.state().calls;
+  const signature = calls.find(call => call[0] === 'cosign' && call[1] === 'verify');
+  assert.equal(signature[2], `${IMAGE}@${DIGEST}`);
+  assert.equal(signature[signature.indexOf('--certificate-github-workflow-sha') + 1], COMMIT);
+  assert.equal(signature[signature.indexOf('--certificate-github-workflow-trigger') + 1], 'push');
+  const provenance = calls.find(call => call[1] === 'attestation');
+  assert.equal(provenance[3], `oci://${IMAGE}@${DIGEST}`);
+  assert(provenance.includes('--bundle-from-oci'));
+  assert.equal(provenance[provenance.indexOf('--signer-digest') + 1], COMMIT);
+  assert.equal(provenance[provenance.indexOf('--predicate-type') + 1], 'https://slsa.dev/provenance/v1');
+  assert(!calls.some(call => call[0] === 'docker'), 'consumer verification never changes tags');
+  for (const digest of ['bleeding-edge', 'sha256:bad', `${DIGEST}\n`]) fails(f.run('verify', digest));
+  fails(f.run('verify', DIGEST, 'short-sha'));
+});
+
+test('bleeding-edge verification rejects release or other-branch signatures and wrong source commits', t => {
+  const f = bleedingEdgeFixture(t);
+  const identity = f.state().identity;
+  f.update(s => s.identity = policy.identity);
+  fails(f.run('verify'), /Wrong certificate identity/);
+  f.update(s => { s.identity = identity; s.sourceRef = 'refs/heads/feature'; });
+  fails(f.run('verify'), /Wrong source ref/);
+  f.update(s => { s.sourceRef = 'refs/heads/main'; s.commit = 'c'.repeat(40); });
+  fails(f.run('verify'), /Wrong signature source/);
+});
+
+test('bleeding-edge signature or provenance failure leaves consumer tags unchanged', t => {
+  for (const failure of ['cosign verify', 'gh attestation verify']) {
+    const f = bleedingEdgeFixture(t);
+    const old = { [`${IMAGE}:bleeding-edge`]: `sha256:${'c'.repeat(64)}` };
+    f.update(s => { s.images = old; s.fail = failure; });
+    fails(f.run('publish'));
+    assert.deepEqual(f.state().images, old);
+    assert(!f.state().calls.some(call => call[0] === 'docker'));
+  }
+});
+
+test('bleeding-edge publication promotes only the verified digest after registry verification', t => {
+  const f = bleedingEdgeFixture(t);
+  passes(f.run('publish'));
+  assert.deepEqual(f.state().images, {
+    [`${IMAGE}:bleeding-edge-${COMMIT.slice(0, 7)}`]: DIGEST,
+    [`${IMAGE}:bleeding-edge`]: DIGEST,
+  });
+  const calls = f.state().calls;
+  assert(calls.findIndex(call => call[1] === 'attestation') < calls.findIndex(call => call[0] === 'docker'));
+  for (const promotion of calls.filter(call => call[3] === 'create')) {
+    assert(promotion.includes('--prefer-index=false'));
+    assert.equal(promotion.at(-1), `${IMAGE}@${DIGEST}`);
+  }
+});
+
+test('bleeding-edge publication refuses other repositories, events, refs, and triggering commits', t => {
+  for (const [name, value] of [
+    ['GITHUB_REPOSITORY', 'example/other'], ['GITHUB_EVENT_NAME', 'pull_request'],
+    ['GITHUB_REF', `refs/tags/${TAG}`], ['GITHUB_SHA', 'c'.repeat(40)],
+  ]) {
+    const f = bleedingEdgeFixture(t);
+    f.env[name] = value;
+    fails(f.run('publish'));
+    assert.deepEqual(f.state().calls, []);
+  }
+});
+
+test('bleeding-edge publication stops if registry promotion changes the digest', t => {
+  const f = bleedingEdgeFixture(t);
+  f.update(s => s.promotedDigest = `sha256:${'c'.repeat(64)}`);
+  fails(f.run('publish'), /Promotion changed digest/);
+  assert.equal(f.state().images[`${IMAGE}:bleeding-edge`], undefined);
+});
 
 test('release versions reject unsafe names and invalid semantic versions', () => {
   for (const tag of ['v0.3.0', 'v1.2.3-rc.1', 'v1.0.0-alpha-beta']) assert(version(tag));

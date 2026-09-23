@@ -89,13 +89,54 @@ Registry copies must preserve the digest and verification material or become
 a separately signed, linked distribution. A registry copy or a rebuilt image
 with the same version label is not interchangeable with the approved digest.
 `bleeding-edge` uses a branch workflow and must fail the release identity
-policy.
+policy. Its separate verification policy is described below.
 
 On repository/workflow compromise, stop releases, identify affected commits,
 digests, and workflow runs, publish an advisory, and block affected digests in
 deployment policy. Keyless signing removes private release-key custody, but
 does not prevent an authorised compromised workflow signing malicious code.
 Revocation does not stop running containers; remove traffic and replace them.
+
+## Development images from main
+
+The **Bleeding-edge image** workflow automatically builds and signs pushes to
+`main` which affect buildable files. Documentation-only and test-only pushes
+retain the existing exclusions. It needs no version bump, release changelog
+entry, manual dispatch, or signing-key secret.
+
+The workflow signs the exact `linux/amd64` OCI index, including its BuildKit
+provenance and SBOM, and attaches GitHub SLSA provenance in GHCR. A fresh job
+verifies both from the registry before moving `bleeding-edge-<short-sha>` and
+`bleeding-edge` to that digest. Signing or verification failure leaves the
+consumer tags unchanged. `bleeding-edge-candidate-<run>-<attempt>` tags are
+intermediate build outputs and must not be used for deployment.
+
+Use the same Node, Cosign, and GitHub CLI versions described above, with
+registry authentication where required. Obtain the expected full `COMMIT`
+from the independently approved `main` change. Resolve the moving image tag
+once, verify that digest, and pull it without resolving the tag again:
+
+```sh
+set -euo pipefail
+COMMIT='<approved-full-main-commit>'
+IMAGE='ghcr.io/resoauth/sag'
+DIGEST=$(docker buildx imagetools inspect "$IMAGE:bleeding-edge" --format '{{.Manifest.Digest}}')
+node tools/release/bleeding-edge.js verify "$DIGEST" "$COMMIT"
+docker pull "$IMAGE@$DIGEST"
+```
+
+The verifier requires the exact certificate identity
+`https://github.com/RESOAuth/smart-access-gateway/.github/workflows/bleeding-edge.yml@refs/heads/main`,
+GitHub's OIDC issuer, a push signature from the expected commit, and SLSA
+provenance from that same source and signer commit on `main`. It retrieves
+the attestation from GHCR and rejects self-hosted attestation runners. Both
+cryptographic checks must succeed; transparency verification remains enabled.
+
+These signatures establish development-build origin, without asserting that
+versioned release gates passed. Development tags, including commit tags, may
+change on rebuild; pin the verified digest in the deployment. The versioned
+release verifier continues to reject this development workflow identity.
+See [ADR 0022](adr/0022-signed-development-images.md).
 
 ## Lambda scope
 
