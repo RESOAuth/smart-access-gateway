@@ -14,6 +14,7 @@ import { resolveClient } from './clients/index.js';
 import { createClientStore } from './clients/store.js';
 import { createStateStore } from './store/index.js';
 import { createPeerJwks } from './keys/peers.js';
+import { createLocalIdentityStore } from './local-identities/index.js';
 import { CSS_VERSION, assetVersion } from './ui/css.js';
 import { JS_VERSION } from './ui/js.js';
 import { contentSecurityPolicy } from './ui/csp.js';
@@ -68,6 +69,7 @@ export async function createContext(env, request, opts = {}) {
   if (!slot.emailSender) slot.emailSender = createEmailSender(config, env);
   if (!slot.store) slot.store = createClientStore(config, env);
   if (!slot.stateStore) slot.stateStore = createStateStore(config, env);
+  if (slot.localIdentityStore === undefined) slot.localIdentityStore = createLocalIdentityStore(config, env) || null;
 
   const [signerSet, emailSender, store, stateStore] = await Promise.all([
     slot.signerSet,
@@ -79,6 +81,7 @@ export async function createContext(env, request, opts = {}) {
   // itself - so it stays outside the Promise.all above.
   if (!slot.peerJwks) slot.peerJwks = createPeerJwks(config, env);
   const peerJwks = slot.peerJwks;
+  const localIdentityStore = slot.localIdentityStore || undefined;
 
   const basePath = config.basePath;
   const path = url.pathname.startsWith(basePath) ? url.pathname.slice(basePath.length) || '/' : url.pathname;
@@ -112,6 +115,7 @@ export async function createContext(env, request, opts = {}) {
     emailSender,
     store,
     stateStore,
+    localIdentityStore,
     peerJwks,
     /** Absolute URL for one of our own endpoints. */
     absolute: (p) => config.issuer + p,

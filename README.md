@@ -8,11 +8,14 @@
 An identity proxy rather than an identity provider. SAG gives your application
 one OpenID Connect endpoint to talk to, and behind it uses whatever the person
 already has - a Microsoft or Google account, or a code emailed to them - so you
-never hold a password and never run a user database.
+do not need to hold passwords or run a user database. A small self-hosted Node
+deployment can opt into operator-provisioned local credential files when an
+upstream is not available.
 
 ``` ascii
 your app  ──OIDC──▶  SAG  ──OIDC──▶  Microsoft / Google
-                      └────email───▶  a one-time code
+                      ├────email───▶  a one-time code
+                      └────local───▶  an optional private credential directory
 ```
 
 It is built to be deployed by anybody in a few minutes, and to be operated at
@@ -43,7 +46,10 @@ has the details, including what to do next.
 single-use authorisation codes and client assertions, or send limits, which
 cannot be enforced statelessly. A session is an encrypted cookie, an in-flight
 request is an encrypted form field, an authorisation code is an encrypted
-string, all AES-256-GCM under keys derived from one master secret.
+string, all AES-256-GCM under keys derived from one master secret. The optional
+Node-only [local identity backend](docs/local-identities.md) is the deliberate
+exception: one private JSON file per operator-provisioned account, with no
+registration or account-management service.
 
 **Runs where you already are.** One core, thin adapters: Cloudflare Workers,
 AWS Lambda, a container, or a plain Node process. Same code, same variables.
@@ -53,6 +59,10 @@ is configured for their domain they go there, otherwise a common endpoint if
 there is one, otherwise a code by email. One sign-in screen, no "choose your
 provider" wall - and when two providers could both take an address, SAG reads
 the domain's mail records to work out which, rather than asking.
+
+A Node deployment may instead put selected domains on the local-password
+screen, with eligible upstreams still offered as alternatives. It never probes
+the credential directory merely to choose the screen.
 
 **Honest about authentication strength.** `acr` and `amr` say what actually
 happened, and a relying party can demand more. A request that asks for MFA is
@@ -102,6 +112,7 @@ reasoning:
 | --- | --- |
 | [limitations.md](docs/limitations.md) | What it does not do |
 | [post-quantum.md](docs/post-quantum.md) | Where the cryptography stands |
+| [local-identities.md](docs/local-identities.md) | Node-only operator-provisioned identities |
 | [adr/](docs/adr/README.md) · [rfcs/](docs/rfcs/README.md) | Why, and what is next |
 | [test/local-stack/](test/local-stack/README.md) | Every platform at once, locally |
 

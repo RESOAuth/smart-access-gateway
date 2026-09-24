@@ -14,8 +14,8 @@ Relying party and upstream provider variables have their own pages:
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `SAG_ISSUER` | derived from the request in development | The `iss` claim and the base for every URL. No trailing slash, no query |
-| `SAG_SECRET` | a well-known development value | Master secret. 48 random bytes, unique to this issuer. Protects sessions, transactions and codes |
-| `SAG_SECRET_PREVIOUS` | - | The secret being retired, so a rotation does not sign everybody out. See [operations.md](operations.md) |
+| `SAG_SECRET` | a well-known development value | Master secret. 48 random bytes, unique to this issuer. Protects sessions, transactions and codes, and seals retained upstream refresh credentials. Local TOTP seeds are plaintext and do not use it |
+| `SAG_SECRET_PREVIOUS` | - | The secret being retired, so a rotation does not sign everybody out and the local identity rekey can open durable credentials. See [operations.md](operations.md) |
 | `SAG_DEV` | true for localhost, `.localhost`, `.local` and `.linux.test` issuers | Forces development mode on or off |
 | `LOG_LEVEL` | `debug` in development, `info` otherwise | `debug`, `info`, `warn`, `error`, `silent` |
 
@@ -80,14 +80,16 @@ direction - see
 | `ACCESS_TOKEN_TTL` | `600` | The access token is only accepted by SAG's own `/userinfo` |
 | `CLOCK_SKEW` | `60` | Tolerance when checking times |
 | `SUBJECT_TYPE` | `public` | `public` gives every relying party the same `sub`, an HKDF of `SUBJECT_SALT` over the string `public` and the address; `pairwise` gives each one a different `sub`, the same HKDF with the relying party's sector in place of `public` |
-| `SUBJECT_SALT` | - | Always required; development falls back to a well-known salt and says so. Values shorter than 16 characters warn but remain unchanged. **Rotation warning**: a new salt orphans every account at every relying party |
+| `SUBJECT_SALT` | - | Always required; development falls back to a well-known salt and says so, except that local identities require an explicit value even in development. Values shorter than 16 characters warn and remain unchanged for other deployments, but are refused with local identities because their filenames need an unguessable HMAC key. **Rotation warning**: a new salt orphans every account at every relying party and makes local identity filenames unreachable |
 | `SANITISE_PLUS_EMAILS` | `true` | Treat `jamie+shop@example.com` as `jamie@example.com` for identity: one mailbox, one person. Overridable per relying party with `CLIENT_<SLUG>_SANITISE_PLUS_EMAILS` |
 
-A `sub` is derived from the verified email address, never from the upstream's
-own subject, so somebody who moves between upstream providers - or falls back
-to an email code - is the same person throughout. What that costs when
-somebody's address changes is in
-[ADR 0011](adr/0011-subject-derived-from-the-verified-address.md).
+For an upstream or email-code identity, a `sub` is derived from the verified
+email address, never from the upstream's own subject, so somebody who moves
+between upstream providers - or falls back to an email code - is the same
+person throughout. A local identity instead uses the stable random id in its
+operator-provisioned record. What those choices cost is in
+[ADR 0011](adr/0011-subject-derived-from-the-verified-address.md) and
+[ADR 0023](adr/0023-node-flat-file-local-identities.md).
 
 A relying party's sector is its declared `sector_identifier`, or its client id.
 Nothing is inferred from its redirect URIs, so a relying party that moves where
@@ -98,9 +100,12 @@ The issuer is deliberately not in the derivation: a relying party stores `iss`
 alongside `sub` and already separates two deployments by it, so renaming this
 one does not orphan anybody. The salt is the only thing that must never change.
 
-`SANITISE_PLUS_EMAILS` decides identity only. OTP send limits always count the
-untagged mailbox, whatever it is set to, because otherwise a new tag on every
-attempt would walk straight past them.
+`SANITISE_PLUS_EMAILS` decides the relying party's address and the subject for
+an upstream or email-code identity. A local subject comes from its stable
+record id instead, and local record lookup retains a plus tag. OTP send and
+local attempt limits always count the untagged mailbox, whatever this is set
+to, because otherwise a new tag on every attempt would walk straight past
+them.
 
 ## Cross-origin requests (CORS)
 
@@ -148,10 +153,36 @@ backend to pick.
 | `STATE_STORE_BACKEND` | `none` | `none`, `memory`, `cf-durable-object`, `dynamodb` |
 | `STATE_STORE_DO_BINDING` | `SAG_STATE` | Durable Object namespace binding |
 | `STATE_STORE_TABLE`, `STATE_STORE_REGION` | - | With `dynamodb` |
-| `STATE_STORE_MAX_ENTRIES` | `10000` | Cap on the in-memory backend. A full store refuses a code or client assertion claim rather than forgetting one |
+| `STATE_STORE_MAX_ENTRIES` | `10000` | Cap on the in-memory backend. A full store refuses a code, client assertion, or local-authentication counter rather than forgetting a security control; best-effort OTP send counters may be evicted first |
 | `REQUIRE_STATE_STORE` | `false` | Refuse to start unless `STATE_STORE_BACKEND` names a real backend, so a template or a Terraform refactor cannot drop it silently |
 
 The older `REPLAY_STORE_*` names still work and mean the same thing.
+
+## Local identities
+
+Node can authenticate operator-provisioned flat-file identities. Workers and
+Lambda cannot. See [local-identities.md](local-identities.md) before enabling
+it: this is a single-writer credential directory, not a general identity
+database, and local credentials do not by themselves verify an email address.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `LOCAL_IDENTITIES_BACKEND` | `none` | `none` or `file`. `file` is available only through the Node adapter |
+| `LOCAL_IDENTITIES_DIR` | `<SAG_DATA_DIR>/local-identities` | Directory of HMAC-named JSON records. Treat it as credential material |
+| `LOCAL_IDENTITIES_BINDING` | `SAG_LOCAL_IDENTITIES` | Internal binding name the Node adapter uses to hand the file store to the core. Normally leave this unchanged |
+| `LOCAL_IDENTITY_DOMAINS` | - | Comma or space separated domains offered local sign-in. `*.example.com` includes the base and its subdomains; `*` deliberately offers it for every domain. Required with the `file` backend |
+| `LOCAL_AUTH_ATTEMPT_WINDOW` | `300` | Seconds in the local password and second-factor attempt window |
+| `LOCAL_AUTH_MAX_ATTEMPTS` | `10` | Attempts allowed for one canonical address within the window |
+| `LOCAL_AUTH_NETWORK_MAX_ATTEMPTS` | `50` | Attempts allowed from one source network address within the window. The Node adapter supplies the socket address rather than trusting an inbound header. Set `0` behind a shared reverse proxy and enforce the real client-address limit at that proxy |
+| `LOCAL_PASSWORD_MAX_BYTES` | `1024` | Maximum UTF-8 byte length accepted by sign-in. Longer input still pays the dummy Argon2id cost and fails generically |
+| `LOCAL_TOTP_SKEW` | `1` | Number of TOTP steps accepted on either side of the current step. `0` to `5` |
+| `LOCAL_ARGON2_CONCURRENCY` | `4` | Maximum simultaneous Argon2id operations in one process. Each default operation uses 64 MiB |
+
+`LOCAL_IDENTITIES_BACKEND=file` also requires an explicit, non-rotating
+`SUBJECT_SALT` and a real `STATE_STORE_BACKEND`. `memory` is sufficient for
+one Node process; a durable shared state store is still preferable for replay
+protection elsewhere. The local identity directory itself must have one writer
+regardless of the state-store choice.
 
 ### Pointing AWS somewhere else
 
@@ -303,14 +334,30 @@ See [upstreams.md](upstreams.md).
 | --- | --- | --- |
 | `ACR_DEFAULT_REQUIRED` | - | A floor for every relying party, applied whether or not they ask |
 
-The values SAG understands, weakest first:
+The values SAG understands. Email/federated strength runs from weakest to
+strongest; explicitly requested local methods stay within the local family:
 
 ``` ascii
 urn:sag:acr:email-otp        a code sent to an address
+urn:sag:acr:local-password   an operator-provisioned local password
+urn:sag:acr:local-mfa        a local password and TOTP or backup code
 urn:sag:acr:federated        an upstream identity provider
 urn:sag:acr:federated-mfa    the upstream reported multi-factor
+urn:sag:acr:mfa              either local-mfa or federated-mfa, as a requirement
 ```
 
-A request that asks for more than the sign-in achieved is refused with
-`unmet_authentication_requirements` rather than quietly answered with
-something weaker.
+The local values form their own family: `local-mfa` satisfies
+`local-password`, but neither local value silently satisfies a federated one,
+and federation does not stand in for a specifically requested local sign-in.
+
+`urn:sag:acr:mfa` is a method-neutral requirement. Only `local-mfa` or
+`federated-mfa` satisfies it; email OTP, a local password alone, and federation
+without MFA do not. Issued tokens retain the actual method-specific `acr`,
+not the generic requirement. Local MFA still does not verify an email address.
+See [ADR 0024](adr/0024-method-neutral-mfa-requirement.md).
+
+A request that asks for more than the sign-in achieved is refused rather
+than quietly answered with something weaker. Upstream failures use
+`unmet_authentication_requirements`; the local password form keeps the same
+generic credential error so an impossible requirement cannot reveal whether
+a password was correct.

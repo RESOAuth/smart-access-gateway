@@ -36,6 +36,21 @@ export async function handleToken(ctx) {
     replayStore: ctx.stateStore,
   });
 
+  // A local account is mutable even though the code is self-contained. Check
+  // the authoritative record after redemption so deletion, disablement, or a
+  // security-version change cannot be raced with an already-issued code.
+  if (grant.local_identity_id) {
+    const current =
+      ctx.localIdentityStore &&
+      (await ctx.localIdentityStore.validateSession({
+        email: grant.email,
+        localIdentityId: grant.local_identity_id,
+        localIdentityKey: grant.local_identity_key,
+        localSecurityVersion: grant.local_security_version,
+      }));
+    if (!current) throw invalidGrant('The local identity for this authorization code is no longer active.');
+  }
+
   const accessToken = await issueAccessToken(ctx.config, grant);
   const claims = await idTokenClaims(ctx.config, {
     grant,

@@ -46,6 +46,7 @@ test('a full email-code sign-in produces a verifiable id_token', async () => {
   assert.equal(uiRes.status, 200);
   assert.equal(userinfo.sub, claims.sub);
   assert.equal(userinfo.email, EMAIL);
+  assert.equal(userinfo.email_verified, true);
 });
 
 test('a code presented with the wrong PKCE verifier is refused', async () => {

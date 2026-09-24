@@ -8,13 +8,15 @@
 //   2. "Has this client assertion been presented?" - assertion replay defence.
 //   3. "How many codes has this address asked for?" - OTP send limits.
 //   4. "Has this session been signed out?" - copied-cookie revocation.
+//   5. "How many local credential attempts have targeted this account or
+//      source network?" - password and second-factor guessing defence.
 //
-// Both reduce to two tiny primitives, so they share one store rather than
+// These reduce to three tiny primitives, so they share one store rather than
 // each growing their own:
 //
 //   claim(id, ttl)      true the first time, false every time after
 //   has(id)             whether a live claim exists
-//   increment(key, ttl) the running count, starting at 1
+//   increment(key, ttl, { failClosed }) the running count, starting at 1
 //
 // Both have to be atomic, which is why Cloudflare KV is deliberately not an
 // option here: it has no compare-and-set and is eventually consistent, so a
@@ -81,27 +83,41 @@ export function createMemoryStore({ maxEntries = 10000 } = {}) {
       }
       return true;
     },
-    async increment(key, ttlSeconds) {
+    async increment(key, ttlSeconds, { failClosed = false } = {}) {
       const now = nowSeconds();
       const existing = counters.get(key);
       if (existing !== undefined && existing.expiresAt >= now) {
+        // A key first used by a best-effort caller may later protect an
+        // account. Once upgraded, it must never become an eviction candidate.
+        if (failClosed) existing.failClosed = true;
         existing.count += 1;
         return existing.count;
       }
       if (counters.size >= maxEntries) {
         sweep(counters, now);
-        // Counters can be dropped where claims cannot: the worst case is an
-        // address getting its send allowance back early, not a code being
-        // redeemed twice. Oldest first, which for equal windows is the one
-        // nearest to expiring anyway.
+        // OTP-send counters are best effort and may be dropped. Account-
+        // protection counters are fail closed: neither another local attempt
+        // nor an OTP flood may erase one and restore a guesser's allowance.
         let drop = Math.max(1, Math.ceil(maxEntries / 10));
-        for (const oldest of counters.keys()) {
+        for (const [oldest, entry] of counters) {
           if (counters.size < maxEntries) break;
+          if (entry.failClosed) continue;
           counters.delete(oldest);
           if (--drop <= 0) break;
         }
+        if (counters.size >= maxEntries) {
+          throw new Error(
+            'the in-memory state store is full (' +
+              maxEntries +
+              ' protected counters). Raise STATE_STORE_MAX_ENTRIES, or use a store that is not in-process.',
+          );
+        }
       }
-      counters.set(key, { expiresAt: now + Math.max(1, ttlSeconds), count: 1 });
+      counters.set(key, {
+        expiresAt: now + Math.max(1, ttlSeconds),
+        count: 1,
+        failClosed: Boolean(failClosed),
+      });
       return 1;
     },
     /** Test and diagnostic hook; never used in the request path. */

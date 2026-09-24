@@ -11,14 +11,15 @@
 // the operating system's theme for a frame and then swap - the flash that makes
 // a sign-in page feel broken. Everything else waits for the document.
 //
-// Four enhancements, in the order they appear below:
+// Five enhancements, in the order they appear below:
 //
 //   1. a colour theme control, which exists only because this file ran, and so
 //      never appears as a dead control on a page whose script was blocked;
 //   2. the form_post auto-submit, which used to be an inline onload handler and
 //      is here instead so that no page needs 'unsafe-inline' for script;
 //   3. tidying a pasted one-time code, and submitting once it is complete;
-//   4. marking a submitted form busy, so a second click cannot spend a second
+//   4. submitting an authenticator code after the person finishes typing;
+//   5. marking a submitted form busy, so a second click cannot spend a second
 //      attempt against the same code.
 
 import { assetVersion } from './css.js';
@@ -171,6 +172,42 @@ export const DEFAULT_JS = `
     });
   }
 
+  function submitCodeAfterPause(input) {
+    var expected = Number(input.getAttribute('data-submit-at')) || 0;
+    var timer;
+    var submitted = false;
+
+    function cancel() {
+      clearTimeout(timer);
+    }
+
+    function complete() {
+      var code = input.value.replace(/\\D/g, '');
+      return expected > 0 && code.length === expected;
+    }
+
+    input.focus();
+    if (input.form) input.form.addEventListener('submit', function () {
+      cancel();
+      submitted = true;
+    });
+    input.addEventListener('input', function () {
+      cancel();
+      if (!submitted && complete() && input.form) {
+        timer = setTimeout(function () {
+          if (submitted || !complete()) return;
+          // requestSubmit may be blocked by native validation; only its
+          // submit event confirms that the code was actually submitted.
+          if (input.form.requestSubmit) input.form.requestSubmit();
+          else {
+            submitted = true;
+            input.form.submit();
+          }
+        }, 500);
+      }
+    });
+  }
+
   // A double-clicked submit is a real problem here rather than a cosmetic one:
   // two POSTs of the same one-time code spend two of the attempts allowed for
   // it. The button is disabled after the submission has started, so its value
@@ -207,10 +244,13 @@ export const DEFAULT_JS = `
     var codes = document.querySelectorAll('input[data-length]');
     for (var i = 0; i < codes.length; i++) tidyCode(codes[i]);
 
+    var delayedCodes = document.querySelectorAll('input[data-submit-at]');
+    for (var j = 0; j < delayedCodes.length; j++) submitCodeAfterPause(delayedCodes[j]);
+
     var forms = document.querySelectorAll('form');
-    for (var j = 0; j < forms.length; j++) {
-      if (forms[j].hasAttribute('data-autosubmit')) autoSubmit(forms[j]);
-      else submitOnce(forms[j]);
+    for (var k = 0; k < forms.length; k++) {
+      if (forms[k].hasAttribute('data-autosubmit')) autoSubmit(forms[k]);
+      else submitOnce(forms[k]);
     }
   }
 

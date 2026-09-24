@@ -49,6 +49,10 @@ export function sessionClientFor(config, client) {
  * @param {string} [args.upstream]      Upstream id that authenticated them
  * @param {string} [args.upstreamLabel] Human-readable name for that upstream
  * @param {object} [args.claims]        Upstream claims worth keeping (name, picture)
+ * @param {boolean} [args.emailVerified] Whether this authentication proved control of the address
+ * @param {string} [args.localIdentityId] Stable id for a local or linked identity
+ * @param {string} [args.localIdentityKey] Privacy-preserving record key
+ * @param {number} [args.localSecurityVersion] Version that invalidates older sessions
  */
 export function newSession(config, args) {
   const now = nowSeconds();
@@ -56,12 +60,16 @@ export function newSession(config, args) {
     v: 1,
     sid: randomToken(16),
     email: args.email,
+    emailVerified: args.emailVerified === true,
     acr: args.acr,
     amr: args.amr || [],
     auth_time: args.authTime ?? now,
     upstream: args.upstream,
     upstreamLabel: args.upstreamLabel,
     claims: args.claims || undefined,
+    localIdentityId: args.localIdentityId,
+    localIdentityKey: args.localIdentityKey,
+    localSecurityVersion: args.localSecurityVersion,
     iat: now,
     exp: now + config.session.idleTtlSeconds,
     abs: now + config.session.maxLifetimeSeconds,
@@ -81,12 +89,22 @@ export function reauthenticate(config, session, args) {
   return {
     ...session,
     email: args.email ?? session.email,
+    emailVerified: args.emailVerified === true,
     acr: args.acr,
     amr: args.amr || [],
     auth_time: now,
     upstream: args.upstream,
     upstreamLabel: args.upstreamLabel,
-    claims: args.claims || session.claims,
+    // Profile claims belong to the authentication source. A local password
+    // with no configured claims must not inherit a name or picture asserted
+    // by an earlier upstream authentication in the same browser session.
+    claims: args.claims,
+    // These are authentication-source fields, not sticky profile data. An OTP
+    // or an unlinked upstream re-authentication must not inherit a local id and
+    // accidentally receive that account's stable subject.
+    localIdentityId: args.localIdentityId,
+    localIdentityKey: args.localIdentityKey,
+    localSecurityVersion: args.localSecurityVersion,
     exp: now + config.session.idleTtlSeconds,
   };
 }
@@ -121,6 +139,12 @@ export async function readSessionByName(config, request, name, stateStore) {
     if (typeof session.abs === 'number' && session.abs < now) return undefined;
     if (!session.email || !session.sid) return undefined;
     if (stateStore && (await stateStore.has(revocationKey(session.sid)))) return undefined;
+    // Session v1 pre-dates local identities. Every authentication source that
+    // could mint an older cookie proved the address, so retaining that fact is
+    // the safe migration; new sessions always carry the boolean explicitly.
+    if (session.emailVerified === undefined && !session.localIdentityId) {
+      session.emailVerified = true;
+    }
     return session;
   } catch (err) {
     if (err instanceof SealError) return undefined;

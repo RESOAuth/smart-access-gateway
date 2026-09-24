@@ -14,6 +14,7 @@ Everything is a file you can open:
 | --- | --- |
 | `./config.env` | Settings, as `KEY=value` lines. Read on the host by compose and handed to the container as environment variables |
 | `./data/clients/` | One JSON file per relying party. See [the README in that directory](../data/clients/README.md) |
+| `./data/local-identities/` | Optional operator-provisioned credential records. See [local-identities.md](local-identities.md) |
 | `./data/sag.env` | The generated master secret, subject salt and signing key. Written once, mode 600, never rewritten |
 
 ### How the ownership works
@@ -102,6 +103,24 @@ TLS private key.
 Anything you set in `config.env` wins over the generated file, so moving to a
 real secret manager later means setting `SAG_SECRET` and
 `SIGNING_PRIVATE_JWK` there and leaving `sag.env` alone.
+
+## Local identities
+
+The image includes the Node Argon2id implementation. To enable the optional
+flat-file backend, keep it inside the existing persistent data mount:
+
+```sh
+LOCAL_IDENTITIES_BACKEND=file
+LOCAL_IDENTITIES_DIR=/data/local-identities
+LOCAL_IDENTITY_DOMAINS=example.com
+STATE_STORE_BACKEND=memory
+```
+
+Provision records with the same `SAG_SECRET` and `SUBJECT_SALT` as the
+container, following [local-identities.md](local-identities.md). Do not scale
+this container beyond one process while local identities are enabled: the
+filesystem record revision is not a distributed lock. Back up
+`local-identities/` and `sag.env` together.
 
 ## Putting it behind TLS
 

@@ -82,6 +82,12 @@ Recommended extras:
 `docker compose up`, or run `node adapters/node/server.js` behind whatever
 proxy you already have. See [docker.md](docker.md).
 
+Operator-provisioned [local identities](local-identities.md) are available
+only on this adapter. They need Node.js 24.7.0 or newer with
+`crypto.argon2`, a persistent private directory, and exactly one SAG process
+writing that directory. The container image already uses a suitable runtime;
+an older host can still run SAG without local identities.
+
 Behind a proxy, `SAG_ISSUER` must be the public URL: SAG never derives what it
 is from a `Host` header on a real deployment, because that would let a header
 decide what it claims to be.
@@ -91,6 +97,9 @@ Recommended extras:
 - **State store**: `memory` for a single container, DynamoDB for several.
 - **Rate limiting**: nginx `limit_req`, Caddy's `rate_limit`, or the load
   balancer's own, on `/authorize` and its sub-paths.
+- **Local identity backups**: snapshot the identity directory together with
+  `SUBJECT_SALT`, `SAG_SECRET`, and any active `SAG_SECRET_PREVIOUS`. A file
+  backup without those keys is not a restorable identity store.
 
 ## After deploying, check
 

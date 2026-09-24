@@ -33,15 +33,31 @@ import {
   sessionIsFresh,
   sessionClientFor,
 } from '../session.js';
-import { subjectFor, identityEmail, normaliseEmail, looksLikeEmail, emailTag } from '../identity.js';
-import { satisfies, requiresFederation, acrFromUpstream, acrForOtp } from '../acr.js';
+import {
+  subjectFor,
+  subjectForLocalIdentity,
+  identityEmail,
+  normaliseEmail,
+  looksLikeEmail,
+  emailTag,
+} from '../identity.js';
+import { satisfies, requiresFederation, acrFromUpstream, acrForOtp, acrForLocal } from '../acr.js';
 import { generateCode, digestCode, verifyCode, otpAllowed, alphabetFor } from '../otp.js';
 import { otpMessage } from '../email/message.js';
 import { upstreamsFor, beginUpstream, completeUpstream, labelFor } from '../upstream/index.js';
 import { hintUpstreams } from '../upstream/dns.js';
 import { relayedClaims, inferredClaims, displayIdentity } from '../profile.js';
-import { emailPage, otpPage, continuePage, chooserPage, legalFor } from '../ui/pages.js';
-import { checkOtpSendAllowed } from '../store/limits.js';
+import {
+  emailPage,
+  otpPage,
+  localPasswordPage,
+  localMfaPage,
+  continuePage,
+  chooserPage,
+  legalFor,
+} from '../ui/pages.js';
+import { checkOtpSendAllowed, checkLocalAuthAllowed } from '../store/limits.js';
+import { localIdentityAllowed } from '../local-identities/index.js';
 import { authorizationResponse, failureResponse, startAgainResponse } from './respond.js';
 import { nowSeconds } from '../util/bytes.js';
 import { hasRememberMeCookie, readRememberedEmail, rememberMeCookie, clearRememberMeCookie } from '../remember-me.js';
@@ -79,7 +95,10 @@ export async function handleAuthorize(ctx) {
     tos_uri: client.tosUri,
     policy_uri: client.policyUri,
   });
-  const session = await readSession(config, request, sessionClientFor(config, client), ctx.stateStore);
+  const session = await validSession(
+    ctx,
+    await readSession(config, request, sessionClientFor(config, client), ctx.stateStore),
+  );
 
   return decide(ctx, { tx, client, session });
 }
@@ -186,6 +205,48 @@ async function renderOtp(ctx, { tx, error, devCode, resent }) {
       legal: legalFor(ctx.config, tx),
       action: ctx.route('/authorize/otp'),
       resendAction: ctx.route('/authorize/resend'),
+      changeAction: ctx.route('/authorize/restart'),
+    }),
+    error ? 400 : 200,
+  );
+}
+
+async function renderLocalPassword(ctx, { tx, error }) {
+  const candidates = upstreamsFor(ctx.config, tx.email).map((upstream) => ({
+    id: upstream.id,
+    label: labelFor(upstream),
+  }));
+  const sealed = await sealTransaction(ctx.config, advance(tx, { stage: STAGE.LOCAL_PASSWORD }));
+  return html(
+    localPasswordPage(ctx, {
+      tx: sealed,
+      email: tx.email,
+      error,
+      upstreams: candidates,
+      maxLength: ctx.config.localIdentities.maxPasswordBytes,
+      clientLogoUri: tx.logo_uri,
+      clientLogoAlt: tx.client_name,
+      legal: legalFor(ctx.config, tx),
+      action: ctx.route('/authorize/local-password'),
+      upstreamAction: ctx.route('/authorize/upstream'),
+      changeAction: ctx.route('/authorize/restart'),
+    }),
+    error ? 400 : 200,
+  );
+}
+
+async function renderLocalMfa(ctx, { tx, error, totpDigits }) {
+  const sealed = await sealTransaction(ctx.config, advance(tx, { stage: STAGE.LOCAL_MFA }));
+  return html(
+    localMfaPage(ctx, {
+      tx: sealed,
+      email: tx.email,
+      error,
+      totpDigits,
+      clientLogoUri: tx.logo_uri,
+      clientLogoAlt: tx.client_name,
+      legal: legalFor(ctx.config, tx),
+      action: ctx.route('/authorize/local-mfa'),
       changeAction: ctx.route('/authorize/restart'),
     }),
     error ? 400 : 200,
@@ -303,6 +364,11 @@ async function route(ctx, { tx }) {
   const { config } = ctx;
   const candidates = upstreamsFor(config, tx.email);
   const otpPossible = otpAllowed(config, tx.email) && !requiresFederation(tx.acr_values);
+
+  // Local account existence is deliberately not consulted here. Every
+  // address in a configured domain gets the same password screen, while the
+  // verifier does equivalent Argon2id work for absent and malformed records.
+  if (localIdentityAllowed(config, tx.email)) return renderLocalPassword(ctx, { tx });
 
   if (candidates.length === 1) return startUpstream(ctx, { tx, upstream: candidates[0] });
   if (candidates.length > 1) {
@@ -497,7 +563,13 @@ export async function handleOtpSubmit(ctx) {
   // There is no upstream on this path, so anything beyond the address is a
   // guess. What is guessed, and whether anything is, is the operator's call;
   // see src/profile.js.
-  const sessionArgs = { email: tx.email, acr, amr, claims: inferredClaims(ctx.config, tx.email) };
+  const sessionArgs = {
+    email: tx.email,
+    emailVerified: true,
+    acr,
+    amr,
+    claims: inferredClaims(ctx.config, tx.email),
+  };
   const existing = await readSession(
     ctx.config,
     ctx.request,
@@ -505,10 +577,170 @@ export async function handleOtpSubmit(ctx) {
     ctx.stateStore,
   );
   const session =
-    existing && existing.email === tx.email
+    existing && !existing.localIdentityId && existing.email === tx.email
       ? reauthenticate(ctx.config, existing, sessionArgs)
       : newSession(ctx.config, sessionArgs);
 
+  return complete(ctx, { tx, client, session, refreshCookie: true });
+}
+
+// ---------------------------------------------------------------------------
+// Local password and second factor
+// ---------------------------------------------------------------------------
+
+const LOCAL_CREDENTIAL_ERROR = {
+  title: 'We could not sign you in',
+  detail: 'Check your details and try again.',
+};
+
+export async function handleLocalPassword(ctx) {
+  const loaded = await loadTransaction(ctx);
+  if (loaded.fail) return loaded.fail;
+  const { tx, client, params } = loaded;
+  if (
+    tx.stage !== STAGE.LOCAL_PASSWORD ||
+    !tx.email ||
+    !localIdentityAllowed(ctx.config, tx.email) ||
+    !ctx.localIdentityStore
+  ) {
+    return startAgainResponse(ctx);
+  }
+
+  // Both checks run even when the account is missing or the limit is already
+  // exhausted. That keeps file existence, disablement, and rate-limit state
+  // from becoming timing or response-shape oracles.
+  const [limit, found] = await Promise.all([
+    checkLocalAuthAllowed(ctx, tx.email, 'password'),
+    ctx.localIdentityStore.find(tx.email),
+  ]);
+  const verified = await ctx.localIdentityStore.verifyPassword(found, single(params, 'password'));
+  if (!verified || !limit.allowed) {
+    if (found.malformed) {
+      ctx.log.error('local identity record is malformed', {
+        identity: found.key.slice(0, 12),
+        error: found.error?.message,
+      });
+    }
+    if (!limit.allowed) {
+      ctx.log.warn('local password attempt refused', {
+        reason: limit.reason,
+        identity: found.key.slice(0, 12),
+      });
+    }
+    return renderLocalPassword(ctx, { tx, error: LOCAL_CREDENTIAL_ERROR });
+  }
+
+  const requiresSecondFactor = ctx.localIdentityStore.requiresSecondFactor(found.record);
+  const potential = acrForLocal(requiresSecondFactor ? 'totp' : undefined);
+  // Do not turn an intentionally impossible acr_values request into a
+  // password-confirmation oracle. A credential that cannot finish this
+  // request receives exactly the same page and wording as a wrong one.
+  if (!satisfies(potential.acr, tx.acr_values)) {
+    return renderLocalPassword(ctx, { tx, error: LOCAL_CREDENTIAL_ERROR });
+  }
+
+  if (requiresSecondFactor) {
+    return renderLocalMfa(ctx, {
+      totpDigits: found.record.totp.map((credential) => credential.digits),
+      tx: advance(tx, {
+        local_identity: {
+          id: found.record.id,
+          security_version: found.record.security_version,
+        },
+      }),
+    });
+  }
+  return completeLocalAuthentication(ctx, {
+    tx,
+    client,
+    record: found.record,
+  });
+}
+
+export async function handleLocalMfa(ctx) {
+  const loaded = await loadTransaction(ctx);
+  if (loaded.fail) return loaded.fail;
+  const { tx, client, params } = loaded;
+  if (
+    tx.stage !== STAGE.LOCAL_MFA ||
+    !tx.email ||
+    !tx.local_identity?.id ||
+    !ctx.localIdentityStore ||
+    !localIdentityAllowed(ctx.config, tx.email)
+  ) {
+    return startAgainResponse(ctx);
+  }
+
+  const [limit, found] = await Promise.all([
+    checkLocalAuthAllowed(ctx, tx.email, 'mfa'),
+    ctx.localIdentityStore.find(tx.email),
+  ]);
+  const expected =
+    found.record &&
+    !found.record.disabled &&
+    found.record.id === tx.local_identity.id &&
+    found.record.security_version === tx.local_identity.security_version;
+  const result = expected
+    ? await ctx.localIdentityStore.verifySecondFactor(
+        found.record,
+        single(params, 'code'),
+        Date.now(),
+        { consume: limit.allowed },
+      )
+    : undefined;
+  if (!result || !limit.allowed) {
+    if (found.malformed) {
+      ctx.log.error('local identity record is malformed', {
+        identity: found.key.slice(0, 12),
+        error: found.error?.message,
+      });
+    }
+    if (!limit.allowed) {
+      ctx.log.warn('local second-factor attempt refused', {
+        reason: limit.reason,
+        identity: found.key.slice(0, 12),
+      });
+    }
+    return renderLocalMfa(ctx, {
+      tx,
+      error: LOCAL_CREDENTIAL_ERROR,
+      totpDigits: expected ? found.record.totp.map((credential) => credential.digits) : [],
+    });
+  }
+
+  return completeLocalAuthentication(ctx, {
+    tx,
+    client,
+    record: result.record,
+    secondFactor: result.method,
+  });
+}
+
+async function completeLocalAuthentication(ctx, { tx, client, record, secondFactor }) {
+  const { acr, amr } = acrForLocal(secondFactor);
+  const sessionArgs = {
+    email: tx.email,
+    emailVerified: false,
+    acr,
+    amr,
+    claims: ctx.localIdentityStore.profileClaims(record),
+    localIdentityId: record.id,
+    localIdentityKey: record._key,
+    localSecurityVersion: record.security_version,
+  };
+  const existing = await validSession(
+    ctx,
+    await readSession(
+      ctx.config,
+      ctx.request,
+      sessionClientFor(ctx.config, client),
+      ctx.stateStore,
+    ),
+  );
+  const session =
+    existing && existing.localIdentityId === record.id
+      ? reauthenticate(ctx.config, existing, sessionArgs)
+      : newSession(ctx.config, sessionArgs);
   return complete(ctx, { tx, client, session, refreshCookie: true });
 }
 
@@ -526,11 +758,14 @@ export async function handleContinue(ctx) {
   const loaded = await loadTransaction(ctx);
   if (loaded.fail) return loaded.fail;
   const { tx, client } = loaded;
-  const session = await readSession(
-    ctx.config,
-    ctx.request,
-    sessionClientFor(ctx.config, client),
-    ctx.stateStore,
+  const session = await validSession(
+    ctx,
+    await readSession(
+      ctx.config,
+      ctx.request,
+      sessionClientFor(ctx.config, client),
+      ctx.stateStore,
+    ),
   );
   if (!session) return renderEmail(ctx, { tx });
   if (!sessionIsFresh(session, { maxAge: tx.max_age, clockSkew: ctx.config.tokens.clockSkewSeconds })) {
@@ -645,20 +880,61 @@ export async function handleCallback(ctx) {
 
   const sessionArgs = {
     email: outcome.email,
+    emailVerified: true,
     acr,
     amr,
     upstream: upstream.id,
     upstreamLabel: labelFor(upstream),
     claims: relayedClaims(ctx.config, outcome.claims, upstreamAcr),
   };
-  const existing = await readSession(
-    ctx.config,
-    ctx.request,
-    sessionClientFor(ctx.config, client),
-    ctx.stateStore,
+  // An exact operator-provisioned link converges local password and upstream
+  // sign-in on the local account's stable subject. Email equality alone is
+  // never a link: the configured upstream registration, verified issuer, and
+  // upstream subject must all match the record.
+  const linked =
+    ctx.localIdentityStore && normaliseEmail(outcome.email) === normaliseEmail(stateTx.email)
+      ? await ctx.localIdentityStore.linked(stateTx.email, {
+          upstream: upstream.id,
+          issuer: outcome.claims.iss,
+          subject: outcome.claims.sub,
+        })
+      : undefined;
+  if (linked) {
+    let record = linked.record;
+    if (outcome.refreshToken) {
+      record = await ctx.localIdentityStore.storeRefreshToken(record, linked.link, outcome.refreshToken);
+      if (!record) {
+        // A concurrent TOTP/backup-code update may have advanced the revision.
+        // Re-resolve the exact link once; never overwrite the newer record.
+        const retried = await ctx.localIdentityStore.linked(stateTx.email, {
+          upstream: upstream.id,
+          issuer: outcome.claims.iss,
+          subject: outcome.claims.sub,
+        });
+        record = retried &&
+          (await ctx.localIdentityStore.storeRefreshToken(retried.record, retried.link, outcome.refreshToken));
+      }
+      if (!record) throw new Error('could not persist the upstream refresh credential safely');
+    }
+    sessionArgs.email = stateTx.email;
+    sessionArgs.localIdentityId = record.id;
+    sessionArgs.localIdentityKey = record._key;
+    sessionArgs.localSecurityVersion = record.security_version;
+  }
+  const existing = await validSession(
+    ctx,
+    await readSession(
+      ctx.config,
+      ctx.request,
+      sessionClientFor(ctx.config, client),
+      ctx.stateStore,
+    ),
   );
+  const samePrincipal = sessionArgs.localIdentityId
+    ? existing?.localIdentityId === sessionArgs.localIdentityId
+    : existing && !existing.localIdentityId && existing.email === outcome.email;
   const session =
-    existing && existing.email === outcome.email
+    samePrincipal
       ? reauthenticate(ctx.config, existing, sessionArgs)
       : newSession(ctx.config, sessionArgs);
 
@@ -681,6 +957,16 @@ export async function handleCallback(ctx) {
  */
 async function offerFallback(ctx, tx, detail) {
   const candidates = upstreamsFor(ctx.config, tx.email);
+  if (localIdentityAllowed(ctx.config, tx.email)) {
+    ctx.log.info('offering local authentication after an upstream failure', { detail });
+    return renderLocalPassword(ctx, {
+      tx: withoutAttempt(tx),
+      error: {
+        title: 'That sign-in did not complete',
+        detail: 'Try again, choose another provider, or use your password.',
+      },
+    });
+  }
   if (candidates.length > 1) {
     ctx.log.info('offering the other providers after an upstream failure', { detail });
     return renderChooser(ctx, {
@@ -731,7 +1017,9 @@ async function complete(ctx, { tx, client, session: authenticated, refreshCookie
   // party's view of it is settled, so that a per-client SANITISE_PLUS_EMAILS
   // and a shared session can coexist.
   const email = identityEmail(ctx.config, session.email, client);
-  const sub = await subjectFor(ctx.config, email, client);
+  const sub = session.localIdentityId
+    ? await subjectForLocalIdentity(ctx.config, session.localIdentityId, client)
+    : await subjectFor(ctx.config, email, client);
   const code = await issueCode(ctx.config, { tx, session, sub, email });
   ctx.log.info('authorization code issued', {
     client_id: tx.client_id,
@@ -755,4 +1043,11 @@ async function complete(ctx, { tx, client, session: authenticated, refreshCookie
     if (rememberedEmail) response = withCookie(response, await rememberMeCookie(ctx.config, session.email));
   }
   return response;
+}
+
+/** A mutable local account can invalidate a still-valid sealed session. */
+async function validSession(ctx, session) {
+  if (!session?.localIdentityId) return session;
+  if (!ctx.localIdentityStore) return undefined;
+  return (await ctx.localIdentityStore.validateSession(session)) ? session : undefined;
 }

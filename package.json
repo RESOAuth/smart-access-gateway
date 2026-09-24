@@ -29,6 +29,7 @@
     "keygen": "node tools/keygen.js",
     "hash-secret": "node tools/hash-secret.js",
     "generate-client-secret": "node tools/generate-client-secret.js",
+    "generate-local-identity": "node tools/generate-local-identity.js",
     "cf:dev": "wrangler dev --config adapters/cloudflare/wrangler.toml",
     "cf:deploy": "wrangler deploy --config adapters/cloudflare/wrangler.toml",
     "example": "node examples/relying-party/server.js",

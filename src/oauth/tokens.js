@@ -37,9 +37,10 @@ export async function idTokenClaims(config, { grant, audience, accessToken, nonc
   if (nonce !== undefined) claims.nonce = nonce;
   if (grant.scope?.includes('email')) {
     claims.email = grant.email;
-    // SAG only ever asserts an address it has proved control of: either an
-    // upstream said so, or a code was delivered to it.
-    claims.email_verified = true;
+    // Possessing a local password, even with TOTP, does not prove control of
+    // the address written on the record. Only durable evidence carried by the
+    // authentication path may add this claim.
+    if (grant.email_verified === true) claims.email_verified = true;
   }
   if (grant.scope?.includes('profile') && grant.claims) {
     Object.assign(claims, outboundClaims(config, grant.claims));
@@ -90,11 +91,14 @@ export async function issueAccessToken(config, grant) {
     client_id: grant.client_id,
     scope: grant.scope,
     email: grant.email,
+    email_verified: grant.email_verified === true,
     acr: grant.acr,
     amr: grant.amr,
     auth_time: grant.auth_time,
     sid: grant.sid,
     claims: grant.claims,
+    local_identity_id: grant.local_identity_id,
+    local_security_version: grant.local_security_version,
     iat: now,
     exp: now + config.tokens.accessTokenTtlSeconds,
   });
@@ -102,7 +106,13 @@ export async function issueAccessToken(config, grant) {
 
 export async function readAccessToken(config, token) {
   try {
-    return await unseal(config.secrets, ACCESS_PURPOSE, token);
+    const grant = await unseal(config.secrets, ACCESS_PURPOSE, token);
+    // Access tokens already in browsers at upgrade time came only from an
+    // email-verifying path. New tokens carry this boolean explicitly.
+    if (grant.email_verified === undefined && !grant.local_identity_id) {
+      grant.email_verified = true;
+    }
+    return grant;
   } catch {
     return undefined;
   }

@@ -211,7 +211,7 @@ function upstreamPrompt(upstream, tx) {
 /**
  * Exchange the upstream code and validate the id_token it returns.
  *
- * @returns {Promise<{email: string, claims: object, upstream: object}>}
+ * @returns {Promise<{email: string, claims: object, upstream: object, refreshToken?: string}>}
  */
 export async function completeUpstream(ctx, upstream, { code, stateTx }) {
   const { config } = ctx;
@@ -278,7 +278,17 @@ export async function completeUpstream(ctx, upstream, { code, stateTx }) {
     }
   }
 
-  return { email, claims, upstream };
+  return {
+    email,
+    claims,
+    upstream,
+    // Never browser-sealed or logged. A linked local identity may retain it in
+    // its purpose-bound encrypted record; every other path discards it.
+    refreshToken:
+      typeof payload.refresh_token === 'string' && payload.refresh_token.length <= 16384
+        ? payload.refresh_token
+        : undefined,
+  };
 }
 
 async function verifyUpstreamIdToken(upstream, metadata, token, { nonce, clockSkew, maxAge, allowHttp }) {

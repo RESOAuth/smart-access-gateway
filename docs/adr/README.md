@@ -46,3 +46,6 @@ decision here leaves open.
 | [0020](0020-signed-releases.md) | Signed releases bind artefacts to the approved source, tag, and release workflow |
 | [0021](0021-github-operated-release-authorisation.md) | GitHub creates release tags and dispatches keyless signing without a local signing key |
 | [0022](0022-signed-development-images.md) | Development images are signed and verified under a separate main workflow identity |
+| [0023](0023-node-flat-file-local-identities.md) | Local identities are operator-managed, Node-only flat files |
+| [0024](0024-method-neutral-mfa-requirement.md) | A method-neutral MFA requirement accepts local or federated MFA without changing the reported method |
+| [0025](0025-plaintext-local-totp-seeds.md) | Local TOTP seeds are plaintext so credential management does not require the gateway's sealing key |

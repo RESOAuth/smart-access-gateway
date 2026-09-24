@@ -4,7 +4,7 @@ Every platform SAG runs on, at once, on one machine.
 
 ```sh
 ./stack.sh up          # build, start, wait, print the map
-./stack.sh verify      # sign in as all four applications, headless
+./stack.sh verify      # sign in as all five applications, headless
 ./stack.sh down
 ```
 
@@ -18,29 +18,33 @@ A Durable Object, a signature made inside KMS, the separate `cookies` array
 API Gateway hands a Lambda: none of those exist in a unit test, and all of them
 are load-bearing.
 
-So this stack runs the same code three ways, with a different backend for every
-replaceable part, and then signs somebody in on each:
+So this stack runs the same code on all three platforms, with a different
+backend for every replaceable part, then adds a second Node instance for local
+file-backed identities:
 
 | Instance | Runtime | Signing | State | Relying parties |
 | --- | --- | --- | --- | --- |
 | `sag-node` :8791 | Node, in the repository's own image | a key generated into a volume | an in-process map | a directory of JSON files |
 | `sag-workers` :8792 | workerd, via `wrangler dev` | a second, private Worker | a Durable Object | environment variables |
 | `sag-lambda` :8793 | AWS's Lambda base image | AWS KMS | DynamoDB | an S3 bucket |
+| `sag-local` :8794 | Node, in the repository's own image | a key generated into a volume | an in-process map | environment variables |
 
 Nothing inside SAG is stubbed. workerd and its Durable Objects are the real
 implementation; the Lambda runs in AWS's own image behind its runtime interface
 emulator; KMS, DynamoDB and S3 are LocalStack. What SAG sees is what it would
 see deployed.
 
-All three also set `PEER_JWKS_URLS` to the other two, a complete mesh, so each
-instance's `/jwks.json` ends up describing all three signers rather than only
-its own - the JWKS federation described in
+The original three also set `PEER_JWKS_URLS` to the other two, a complete mesh,
+so each instance's `/jwks.json` ends up describing all three signers rather
+than only its own - the JWKS federation described in
 [docs/multi-region.md](../../docs/multi-region.md), exercised for real rather
-than only in `test/peer-jwks.test.js`'s unit tests.
+than only in `test/peer-jwks.test.js`'s unit tests. The local-identity instance
+is deliberately outside that mesh: it tests authentication and filesystem
+storage, not a fourth federation topology.
 
 ## Who is signing in
 
-Four applications, all running the same hundred lines from
+Five applications, all running the same hundred lines from
 [examples/relying-party](../../examples/relying-party/server.js):
 
 | | Signs in against | As |
@@ -49,6 +53,7 @@ Four applications, all running the same hundred lines from
 | <http://localhost:8802> | the Workers instance | `rp-workers`, a public client with PKCE |
 | <http://localhost:8803> | the Lambda instance | `rp-lambda`, confidential, `client_secret_basic` |
 | <http://localhost:8804> | the Node instance | a client id that is a URL, registered nowhere |
+| <http://localhost:8805> | the local-identity instance | `rp-local`, a public client with PKCE |
 
 The fourth is the interesting one. Nobody registered it: its client id is
 `http://localhost:8804/.well-known/client.json`, and SAG fetches that document
@@ -62,9 +67,9 @@ The Node instance accepts such clients from `localhost` only
 permitted metadata publisher chooses its redirect URIs, which can be on another
 origin or be loopback URIs for a native application.
 
-Four separate applications rather than one with a switch, because that is what
+Five separate applications rather than one with a switch, because that is what
 catches an issuer or an audience leaking between them. Each page links to the
-other three.
+other four.
 
 Every instance guesses a display name from the address and draws an initials
 avatar, because there is no Microsoft or Google registration here to relay a
@@ -80,6 +85,40 @@ every issuer here is a development hostname:
 ```sh
 ./stack.sh logs sag-node
 ```
+
+## The local account
+
+`sag-local` reads operator-provisioned records from `/data/identities` in its
+own named volume. It accepts local identities only for `local.test`; an address
+from another domain never probes the directory. Email codes are disabled on
+this instance, so a missing record cannot silently fall through to mailbox
+authentication.
+
+On the first container start, the generated fixture in [identities/](identities)
+is copied from its read-only mount into the writable data volume. TOTP replay
+state is therefore persisted and updated in `/data`, while the source fixture
+is never changed. The copy is owner-only inside the container.
+
+The seed is plaintext Base32 in `totp[].secret`; it does not depend on
+`SAG_SECRET`. An existing volume from the earlier sealed-TOTP draft needs an
+offline format conversion before running the updated gateway. Do not replace
+the whole record just to change its seed representation: preserve its stable
+id, password, backup codes, and TOTP replay marker.
+
+The headless verifier uses these development-only credentials:
+
+```text
+email:        local.user@local.test
+password:     local-stack-password-not-for-production
+TOTP secret: CMTADK6EESB3ORC5GFPEWRXOYBQMMWCX
+```
+
+The fixture was created with `tools/generate-local-identity.js`, not assembled
+by hand. `SAG_LOCAL_STACK_EMAIL`, `SAG_LOCAL_STACK_PASSWORD`, and
+`SAG_LOCAL_STACK_TOTP_SECRET` let the verifier target a replacement fixture.
+These are test credentials published with the stack, not examples to copy into
+a deployment. `./stack.sh down` removes the writable identity record with the
+rest of the volumes.
 
 ## Addresses
 
@@ -111,13 +150,16 @@ pip3 install --user --break-system-packages -U podman-compose
 ```sh
 ./stack.sh verify              # all of them
 ./stack.sh verify sag-lambda   # one, by name: sag-node, sag-workers,
-                               # sag-lambda or rp-cimd
+                               # sag-lambda, rp-cimd or sag-local
 ```
 
 For each instance, as a browser: discovery, the JWKS, the email screen, the
-code screen, the redirect back, the token exchange, and the `id_token` verified
-against the key that instance publishes. Then the three things only a real
-platform can answer:
+configured authentication screens, the redirect back, the token exchange, and
+the `id_token` verified against the key that instance publishes. The local
+flow requests `urn:sag:acr:mfa`, checks the method-specific `acr` and `amr`,
+and confirms that neither the ID token nor
+`/userinfo` claims the address is verified merely because its password and
+TOTP were accepted. Then the three things only a real platform can answer:
 
 - **the code is single use** - an in-process map, a Durable Object and a
   DynamoDB conditional write have to give the same answer the second time;
@@ -177,6 +219,7 @@ podman exec sag-localstack awslocal kms describe-key --key-id alias/sag-signing
 | The Node instance's relying parties | [clients/](clients) | within `CLIENTS_STORE_CACHE_TTL`, 60s by default; a newly added one within ten |
 | The Lambda instance's relying parties | [localstack/clients/](localstack/clients) | `podman restart sag-localstack`, which re-seeds the bucket |
 | The Workers instance, all of it | [workers/wrangler.dev.toml](workers/wrangler.dev.toml) | `./stack.sh restart sag-workers` |
+| Local identity records | `sag-local`'s `/data/identities` volume, through `tools/generate-local-identity.js` | the next sign-in |
 | The self-describing client's registration | nothing to edit - it is [the document the application serves](../../examples/relying-party/server.js) | `./stack.sh restart rp-cimd`, then within `CLIENTS_CIMD_CACHE_TTL` |
 | SAG itself | `src/`, `adapters/` | `./stack.sh up`, which always rebuilds and recreates |
 
@@ -188,8 +231,8 @@ the process, which is why the Workers instance has no `.env` file and why
 
 | Port | |
 | --- | --- |
-| 8791, 8792, 8793 | the three SAG instances |
-| 8801, 8802, 8803, 8804 | the four applications |
+| 8791, 8792, 8793, 8794 | the four SAG instances |
+| 8801, 8802, 8803, 8804, 8805 | the five applications |
 | 4566 | LocalStack: KMS, DynamoDB, S3 |
 | 8790 | the Lambda runtime interface emulator, on loopback, for posting an event by hand |
 
@@ -214,12 +257,13 @@ a test rig.
 ## What it does not cover
 
 - **Upstream Microsoft and Google.** Both need a real client registration and
-  an https redirect URI, so the stack is email codes only. Federation is tested
-  in `npm test` against a stub provider that serves a real discovery document
-  and a genuinely signed `id_token`. With no upstreams there is never more than
-  one route for an address, so the DNS provider hint never fires either and is
-  set to `off` explicitly, so a machine with no DNS behaves the same as one
-  with. It has its own tests, driven through a resolver binding.
+  an https redirect URI, so the stack uses email codes and local credentials.
+  Federation is tested in `npm test` against a stub provider that serves a real
+  discovery document and a genuinely signed `id_token`. With no upstreams
+  there is never more than one route for an address, so the DNS provider hint
+  never fires either and is set to `off` explicitly, so a machine with no DNS
+  behaves the same as one with. It has its own tests, driven through a resolver
+  binding.
 - **Cloudflare KV for relying party records.** The Workers instance keeps its
   one client in the environment. Seeding wrangler's local KV means driving
   wrangler to write it, which is more moving parts than it earns when the file

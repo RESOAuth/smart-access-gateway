@@ -26,7 +26,7 @@ export function emailPage(ctx, { tx, email, rememberMe, error, clientName, clien
         <div class="field">
           <label for="email">Email address</label>
           <input id="email" name="email" type="email" inputmode="email"
-                 autocomplete="username email" spellcheck="false"
+                 autocomplete="username" spellcheck="false"
                  required value="${e(email || '')}"
                  ${error ? 'aria-invalid="true"' : ''}>
         </div>
@@ -99,6 +99,90 @@ export function otpPage(ctx, { tx, email, error, devCode, resent, action, change
         </form>
       </div>`;
   return layout(ctx, { title: 'Check your email', body, legal, clientLogoUri, clientLogoAlt });
+}
+
+/** Local password entry, offered by configured domain rather than file hit. */
+export function localPasswordPage(ctx, { tx, email, error, action, changeAction, upstreams = [], upstreamAction, maxLength = 1024, clientLogoUri, clientLogoAlt, legal }) {
+  const alternatives = upstreams
+    .map(
+      (upstream) =>
+        '<form method="post" action="' + e(upstreamAction) + '">' +
+        hiddenFields({ tx, upstream: upstream.id }) +
+        '<button type="submit" class="secondary" data-busy-label="Redirecting...">Continue with ' +
+        e(upstream.label) +
+        '</button></form>',
+    )
+    .join('\n          ');
+  const body = `
+      <h1>Enter your password</h1>
+      <p class="lede">Sign in as <strong>${e(email)}</strong>.</p>
+      ${errorBlock(error?.title, error?.detail)}
+      <form method="post" action="${e(action)}">
+        ${hiddenFields({ tx })}
+        <input type="hidden" name="username" autocomplete="username" value="${e(email)}">
+        <div class="field">
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password"
+                 autocomplete="current-password" autocapitalize="none" autocorrect="off"
+                 spellcheck="false" maxlength="${e(maxLength)}" required
+                 ${error ? 'aria-invalid="true"' : ''}>
+        </div>
+        <button type="submit" data-busy-label="Signing in...">Sign in</button>
+      </form>
+      <div class="also">
+        ${alternatives}
+        <form method="post" action="${e(changeAction)}">
+          ${hiddenFields({ tx })}
+          <button type="submit" class="secondary">Use a different email address</button>
+        </form>
+      </div>`;
+  return layout(ctx, { title: 'Enter your password', body, legal, clientLogoUri, clientLogoAlt });
+}
+
+/** TOTP or one of the identity's single-use backup codes. */
+export function localMfaPage(ctx, { tx, email, error, action, changeAction, clientLogoUri, clientLogoAlt, legal, totpDigits = [] }) {
+  // A six-digit pause may still be part of an eight-digit code. Where both
+  // are configured, the shorter code keeps its manual Verify button.
+  const submitAt = totpDigits.includes(8) ? 8 : totpDigits.includes(6) ? 6 : undefined;
+  const body = `
+      <h1 id="totp-label">Enter a verification code</h1>
+      <p class="lede" id="totp-hint">Use an authenticator code for <strong>${e(email)}</strong></p>
+      ${errorBlock(error?.title, error?.detail)}
+      <form method="post" action="${e(action)}">
+        ${hiddenFields({ tx })}
+        <div class="field">
+          <input id="totp" name="code" type="text" class="code otp-input totp-input"
+                 inputmode="numeric" autocomplete="one-time-code" autocapitalize="none"
+                 autocorrect="off" spellcheck="false" pattern="[0-9 \\-]*"
+                 placeholder="XXXXXX" minlength="6" maxlength="10"${submitAt ? ' data-submit-at="' + submitAt + '"' : ''}
+                 aria-labelledby="totp-label" aria-describedby="totp-hint" required
+                 ${error ? 'aria-invalid="true"' : ''}>
+        </div>
+        <button type="submit" data-busy-label="Verifying...">Verify</button>
+      </form>
+      <details class="recovery"${error ? ' open' : ''}>
+        <summary>Use a backup code</summary>
+        <form method="post" action="${e(action)}">
+          ${hiddenFields({ tx })}
+          <div class="field">
+            <label for="backup-code">Backup code</label>
+            <span class="hint" id="backup-code-hint">Enter one of your single-use backup codes, including its hyphens.</span>
+            <input id="backup-code" name="code" type="text" class="code backup-code"
+                   inputmode="text" autocomplete="off" autocapitalize="characters"
+                   autocorrect="off" spellcheck="false" maxlength="64"
+                   aria-describedby="backup-code-hint" required
+                   ${error ? 'aria-invalid="true"' : ''}>
+          </div>
+          <button type="submit" data-busy-label="Verifying...">Verify backup code</button>
+        </form>
+      </details>
+      <div class="also">
+        <form method="post" action="${e(changeAction)}">
+          ${hiddenFields({ tx })}
+          <button type="submit" class="secondary">Use a different account</button>
+        </form>
+      </div>`;
+  return layout(ctx, { title: 'Verification code', body, legal, clientLogoUri, clientLogoAlt });
 }
 
 /**
@@ -249,5 +333,7 @@ export function legalFor(config, source = {}) {
 function describeMethod(session) {
   if (session.upstreamLabel) return 'Signed in with ' + session.upstreamLabel;
   if (session.acr && session.acr.endsWith('email-otp')) return 'Verified by email code';
+  if (session.acr && session.acr.endsWith('local-mfa')) return 'Signed in with password and verification code';
+  if (session.acr && session.acr.endsWith('local-password')) return 'Signed in with password';
   return 'Already signed in';
 }

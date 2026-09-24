@@ -1,4 +1,4 @@
-// Rate limits for the one route that costs the operator money.
+// Rate limits for mail delivery and local credential verification.
 //
 // Email OTP sends mail on request, so without a limit anybody can make a
 // deployment send thousands of messages to addresses that never asked for
@@ -6,9 +6,10 @@
 // person holding it can simply present an older copy, so they live in the
 // shared state store when one is configured.
 //
-// Two limits, both per address: a few sends per window, and a daily ceiling.
+// OTP has two limits per address: a few sends per window, and a daily ceiling.
+// Local authentication adds fail-closed address and optional network buckets.
 // The address is never stored - the key is an HMAC of it under the master
-// secret, so a store dump is not a mailing list.
+// secret, so a store dump is not a mailing list or account list.
 //
 // When no store is configured nothing is enforced, and that is deliberate: a
 // platform rate limiting rule in front of the deployment is the recommended
@@ -31,6 +32,11 @@ async function addressKey(config, email) {
   // every attempt.
   const mailbox = stripPlusTag(String(email).toLowerCase());
   return b64u(await hmac(key, mailbox)).slice(0, 22);
+}
+
+async function privateTag(config, purpose, value) {
+  const key = await derive(config.secrets[0], 'rate-limit/' + purpose, 32);
+  return b64u(await hmac(key, String(value))).slice(0, 22);
 }
 
 /**
@@ -89,4 +95,46 @@ export async function checkOtpSendAllowed(ctx, email) {
     return { allowed: true, enforced: false, degraded: true };
   }
   return { allowed: true, enforced: true };
+}
+
+/**
+ * Count local credential attempts by address and, when the adapter supplies
+ * it, by network address. Unlike an email-send limit this protects an account,
+ * so a missing or failed store denies the attempt rather than failing open.
+ */
+export async function checkLocalAuthAllowed(ctx, email, factor = 'password') {
+  const { config, stateStore } = ctx;
+  if (!stateStore) return { allowed: false, enforced: false, reason: 'store' };
+  const window = config.localIdentities.attemptWindowSeconds;
+  const bucket = Math.floor(nowSeconds() / window);
+  try {
+    // The Node adapter overwrites this header from the socket. It is never a
+    // forwarded header supplied by the caller, so a password guesser cannot
+    // choose a new value per request to walk around the network limit. Check
+    // it first, so traffic already refused for one source cannot fill the
+    // protected counter store with arbitrary address keys.
+    const network = ctx.request.headers.get('x-sag-client-ip');
+    if (network && config.localIdentities.networkMaxAttempts > 0) {
+      const tag = await privateTag(config, 'network', network);
+      const networkUsed = await stateStore.increment(
+        'local-' + factor + ':network:' + tag + ':' + bucket,
+        window,
+        { failClosed: true },
+      );
+      if (networkUsed > config.localIdentities.networkMaxAttempts) {
+        return { allowed: false, enforced: true, reason: 'limit' };
+      }
+    }
+    const address = await addressKey(config, email);
+    const used = await stateStore.increment(
+      'local-' + factor + ':address:' + address + ':' + bucket,
+      window,
+      { failClosed: true },
+    );
+    const allowed = used <= config.localIdentities.maxAttempts;
+    return { allowed, enforced: true, reason: allowed ? undefined : 'limit' };
+  } catch (err) {
+    ctx.log.error('local authentication rate limit failed; denying the attempt', { error: err.message });
+    return { allowed: false, enforced: false, reason: 'store' };
+  }
 }

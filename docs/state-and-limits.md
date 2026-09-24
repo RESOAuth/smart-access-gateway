@@ -2,7 +2,7 @@
 
 SAG keeps no database. A session is an encrypted cookie, an in-flight request
 is an encrypted form field, an authorisation code is an encrypted string.
-There are four questions that cannot be answered that way, because the answer
+There are four baseline questions that cannot be answered that way, because the answer
 changes over time and the party holding the token is the party being guarded
 against:
 
@@ -10,6 +10,11 @@ against:
 2. **Has this client assertion already been presented?**
 3. **How many codes has this email address asked for?**
 4. **Has this session been signed out?**
+
+Enabling [local identities](local-identities.md) adds two more: how many
+password attempts one address and one source network have made, and how many
+second-factor attempts one address has made. Those limits use the same atomic
+counter primitive and are mandatory for local authentication.
 
 They reduce to three primitives - claim an identifier once, read a live claim,
 and increment a counter - so they share one optional store rather than growing
@@ -22,8 +27,8 @@ the OTP send limits take the shape they do.
 
 | `STATE_STORE_BACKEND` | Use it when | Notes |
 | --- | --- | --- |
-| `none` (default) | Nothing is configured yet, or a WAF does the rate limiting and you accept the replay and revocation trade-offs | All four controls are off, and start-up says so |
-| `memory` | One Node process, or one container | Genuinely atomic; per instance only. Capped by `STATE_STORE_MAX_ENTRIES`, and a full store refuses a claim rather than forgetting one |
+| `none` (default) | Nothing is configured yet, or a WAF does the rate limiting and you accept the replay and revocation trade-offs | The four baseline controls are off, and start-up says so. Local identities refuse to start with this backend |
+| `memory` | One Node process, or one container | Genuinely atomic; per instance only. Capped by `STATE_STORE_MAX_ENTRIES`; a full store refuses a claim or protected local counter rather than forgetting one, and may evict best-effort OTP send counters first |
 | `cf-durable-object` | **Recommended on Cloudflare** | One object per key, single-threaded, no contention |
 | `dynamodb` | **Recommended on AWS** | Conditional `PutItem` and `ADD`, with the table's own TTL sweeping records |
 
@@ -124,6 +129,22 @@ This control fails closed if the store is full or unreachable. Assertion keys
 are hashed and namespaced before storage, so client-controlled identifiers do
 not become backend keys and cannot collide with authorisation code claims.
 
+## Local identity attempt limits
+
+Local password and second-factor verification cannot be enabled without a
+state store. Password attempts count against both a canonical-address bucket
+and a source-network bucket; second-factor attempts use a separate
+canonical-address bucket. These controls fail closed when the store is full or
+unreachable. Their keys are HMACs rather than addresses, so the state backend
+does not become an account list.
+
+The Node adapter supplies the immediate socket address and never trusts an
+inbound forwarding header. Behind one shared reverse proxy, set
+`LOCAL_AUTH_NETWORK_MAX_ATTEMPTS=0` and enforce the real client-address limit
+at that trusted proxy; otherwise one caller could exhaust the bucket shared by
+every user of the proxy. Address limits remain enabled. See
+[local-identities.md](local-identities.md) for the complete boundary.
+
 ## OTP send limits
 
 When a store is configured, an address may be sent:
@@ -170,7 +191,9 @@ rate-based rule on the same paths. API Gateway throttling is a blunter
 instrument but better than nothing.
 
 **Anywhere else.** nginx `limit_req`, Caddy's `rate_limit`, or whatever the
-proxy offers, on `/authorize` and its sub-paths.
+proxy offers, on `/authorize` and its sub-paths. When local identities are
+enabled behind a proxy, apply a real client-address limit to the local
+password and second-factor POSTs too.
 
 Guessing a code is a separate matter and is handled by the code itself: nine
 characters from a thirty symbol alphabet is about 2 x 10^13 combinations, so

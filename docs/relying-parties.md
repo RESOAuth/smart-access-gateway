@@ -159,8 +159,14 @@ A relying party can ask for an authentication context, and SAG will refuse
 rather than quietly answering with something weaker:
 
 ```sh
-acr_values=urn:sag:acr:federated-mfa
+acr_values=urn:sag:acr:mfa
 ```
+
+This accepts local password plus TOTP or a backup code, or an upstream
+sign-in which reported MFA. Use `urn:sag:acr:federated-mfa` to insist on an
+upstream, or `urn:sag:acr:local-mfa` to insist on local credentials. The
+returned `acr` remains method-specific, and local MFA does not imply
+`email_verified`.
 
 `CLIENT_<SLUG>_ACR_VALUES` sets a floor that applies whether or not the client
 asks, which is how an enterprise deployment stops one application from being

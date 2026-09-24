@@ -148,6 +148,41 @@ test('an upstream that reports no MFA cannot satisfy a demand for it', async (t)
   );
 });
 
+for (const withMfa of [false, true]) {
+  test('a generic MFA request ' + (withMfa ? 'accepts upstream MFA with its actual acr' : 'refuses plain upstream authentication'), async (t) => {
+    const { stub, sag, restore } = await scenario();
+    t.after(restore);
+    const { verifier, handoff } = await untilUpstream(sag, {
+      email: 'person@acme.test',
+      authorize: { acr_values: ACR.MFA },
+    });
+    assert.equal(handoff.status, 303);
+    const sent = readUpstreamRedirect(handoff);
+    await stub.expect({
+      audience: UPSTREAM_CLIENT,
+      nonce: sent.nonce,
+      claims: { email: 'person@acme.test', email_verified: true, amr: withMfa ? ['pwd', 'mfa'] : ['pwd'] },
+    });
+    const back = await sag.raw('/callback?code=c&state=' + encodeURIComponent(sent.state));
+    assert.equal(back.status, 303);
+    const location = new URL(back.headers.get('location'));
+    if (!withMfa) {
+      assert.equal(location.searchParams.get('error'), 'unmet_authentication_requirements');
+      assert.equal(location.searchParams.has('code'), false);
+      return;
+    }
+    const code = location.searchParams.get('code');
+    assert.ok(code);
+    const { res, body } = await redeem(sag, { authCode: code, verifier });
+    assert.equal(res.status, 200);
+    const { body: jwks } = await sag.json('/jwks.json');
+    const { header } = decodeJwt(body.id_token);
+    const claims = await verifyCompact(body.id_token, jwks.keys.find((key) => key.kid === header.kid));
+    assert.equal(claims.acr, ACR.FEDERATED_MFA);
+    assert.ok(claims.amr.includes('mfa'));
+  });
+}
+
 test('a domain-specific upstream cannot assert an address outside its domain', async (t) => {
   const { stub, sag, restore } = await scenario();
   t.after(restore);

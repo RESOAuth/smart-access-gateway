@@ -12,6 +12,7 @@ import { loadConfig } from '../../src/config.js';
 import { cryptoReport } from '../../src/crypto/capabilities.js';
 import { createSignerSet } from '../../src/keys/registry.js';
 import { createFileClientStore } from './client-files.js';
+import { createFileLocalIdentityStore } from './local-identities.js';
 import { createDnsResolver } from './dns.js';
 import { SECURITY_HEADERS } from '../../src/util/http.js';
 
@@ -42,10 +43,28 @@ function buildEnv() {
       process.env.CLIENTS_STORE_DIR || join(process.env.SAG_DATA_DIR || './data', 'clients');
     bag[process.env.CLIENTS_STORE_KV_BINDING || 'SAG_CLIENTS'] = createFileClientStore(dir);
   }
+  if (process.env.LOCAL_IDENTITIES_BACKEND === 'file') {
+    const dir =
+      process.env.LOCAL_IDENTITIES_DIR || join(process.env.SAG_DATA_DIR || './data', 'local-identities');
+    const localIdentities = createFileLocalIdentityStore(dir, {
+      argon2Concurrency: Number(process.env.LOCAL_ARGON2_CONCURRENCY || 4),
+    });
+    localIdentities.assertAvailable();
+    bag[process.env.LOCAL_IDENTITIES_BINDING || 'SAG_LOCAL_IDENTITIES'] = localIdentities;
+  }
   return bag;
 }
 
-const env = buildEnv();
+let env;
+try {
+  env = buildEnv();
+} catch (error) {
+  // Optional adapter capabilities are checked before the listener opens, so
+  // configuring local identities on an older Node release fails as one clear
+  // operator error rather than on somebody's first password attempt.
+  console.error('\n  Could not initialise the Node adapter: ' + error.message + '\n');
+  process.exit(1);
+}
 
 /** Node request -> Fetch Request. */
 async function toFetchRequest(req, origin) {
@@ -55,6 +74,10 @@ async function toFetchRequest(req, origin) {
     // eslint-disable-next-line security/detect-object-injection -- integer index into rawHeaders array
     headers.append(req.rawHeaders[i], req.rawHeaders[i + 1]);
   }
+  // Never trust a caller-supplied value for a rate-limit dimension. The core
+  // only reads this adapter-owned header, not X-Forwarded-For.
+  headers.delete('x-sag-client-ip');
+  if (req.socket.remoteAddress) headers.set('x-sag-client-ip', req.socket.remoteAddress);
   let body;
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     const chunks = [];
@@ -143,6 +166,10 @@ async function banner() {
       (config.otp.enabled
         ? config.email.provider + ', ' + config.otp.codeLength + ' character codes'
         : 'disabled'),
+    '  Local auth  ' +
+      (config.localIdentities.backend === 'none'
+        ? 'disabled'
+        : config.localIdentities.backend + ' for ' + config.localIdentities.domains.join(', ')),
     '  State store ' +
       (config.stateStore.backend === 'none'
         ? 'none (codes and assertions are replayable, copied sessions survive logout, and OTP sends are not rate limited)'
@@ -203,6 +230,11 @@ async function banner() {
     lines.push(
       '  Client files ' + files.length + ' in ' + clientFiles.dir + (files.length ? ': ' + files.join(', ') : ''),
     );
+  }
+  const localFiles = env[process.env.LOCAL_IDENTITIES_BINDING || 'SAG_LOCAL_IDENTITIES'];
+  if (localFiles?.list) {
+    const files = await localFiles.list();
+    lines.push('  Identities   ' + files.length + ' record(s) in ' + localFiles.dir);
   }
 
   lines.push('', '  Listening on ' + origin, '');

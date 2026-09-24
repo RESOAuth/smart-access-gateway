@@ -39,6 +39,8 @@ export async function createStubProvider(opts = {}) {
     claims: {},
     /** Set to make the token endpoint fail. */
     tokenError: undefined,
+    /** Optional refresh credential returned beside the next id_token. */
+    refreshToken: undefined,
     /** Requests the stub received, for assertions. */
     tokenRequests: [],
     discoveryCount: 0,
@@ -83,6 +85,7 @@ export async function createStubProvider(opts = {}) {
         token_type: 'Bearer',
         expires_in: 3600,
         id_token: state.pendingIdToken,
+        refresh_token: state.refreshToken,
       });
     }
     return Promise.reject(new Error('stub provider received an unexpected request: ' + url));

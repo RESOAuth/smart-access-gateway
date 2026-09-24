@@ -3,8 +3,11 @@
 
 export const ACR = {
   OTP: 'urn:sag:acr:email-otp',
+  LOCAL_PASSWORD: 'urn:sag:acr:local-password',
+  LOCAL_MFA: 'urn:sag:acr:local-mfa',
   FEDERATED: 'urn:sag:acr:federated',
   FEDERATED_MFA: 'urn:sag:acr:federated-mfa',
+  MFA: 'urn:sag:acr:mfa',
 };
 
 /** Ordered weakest to strongest. A stronger authentication satisfies a weaker demand. */
@@ -29,6 +32,7 @@ export const AMR = {
   PASSWORD: 'pwd',
   HARDWARE_KEY: 'hwk',
   PASSKEY: 'swk',
+  RECOVERY: 'recovery',
 };
 
 const MFA_HINTS = new Set(['mfa', 'otp', 'sms', 'swk', 'hwk', 'fido', 'phr', 'phrh', 'mca', 'face', 'fpt']);
@@ -67,6 +71,14 @@ export function acrForOtp() {
   return { acr: ACR.OTP, amr: [AMR.OTP, AMR.EMAIL] };
 }
 
+export function acrForLocal(secondFactor) {
+  if (!secondFactor) return { acr: ACR.LOCAL_PASSWORD, amr: [AMR.PASSWORD] };
+  return {
+    acr: ACR.LOCAL_MFA,
+    amr: [AMR.PASSWORD, secondFactor === 'totp' ? AMR.OTP : AMR.RECOVERY, AMR.MFA],
+  };
+}
+
 /**
  * Does `held` satisfy the relying party's `requested` acr_values?
  * An empty request is always satisfied. Unknown requested values must match
@@ -74,9 +86,19 @@ export function acrForOtp() {
  */
 export function satisfies(held, requested) {
   if (!requested || requested.length === 0) return true;
+  const local = held === ACR.LOCAL_PASSWORD || held === ACR.LOCAL_MFA;
   const heldStrength = strengthOf(held);
   return requested.some((want) => {
+    // This request leaves the authentication method open; the held context
+    // still records which method actually established MFA.
+    if (want === ACR.MFA) return held === ACR.LOCAL_MFA || held === ACR.FEDERATED_MFA;
     if (want === held) return true;
+    // Authentication method is part of these names. A high-assurance local
+    // sign-in must not silently satisfy a demand specifically for federation,
+    // nor may a federated session stand in for a requested local account.
+    if (local || want === ACR.LOCAL_PASSWORD || want === ACR.LOCAL_MFA) {
+      return held === ACR.LOCAL_MFA && want === ACR.LOCAL_PASSWORD;
+    }
     const wantStrength = strengthOf(want);
     return wantStrength > 0 && heldStrength >= wantStrength;
   });
@@ -85,7 +107,9 @@ export function satisfies(held, requested) {
 /** The weakest method that could satisfy the request, for routing decisions. */
 export function minimumStrengthRequired(requested) {
   if (!requested || requested.length === 0) return 0;
-  const known = requested.map(strengthOf).filter((s) => s > 0);
+  const known = requested
+    .map((want) => strengthOf(want === ACR.MFA ? ACR.FEDERATED_MFA : want))
+    .filter((s) => s > 0);
   return known.length ? Math.min(...known) : Infinity;
 }
 

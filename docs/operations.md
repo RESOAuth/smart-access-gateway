@@ -27,18 +27,41 @@ rotation is done in two deployments, not one.
    sealed under the old one still opens. Nobody is signed out, and anybody
    halfway through typing a code can still finish.
 
-2. **Wait.** Long enough for every existing session to have been used at least
+2. **Rekey retained upstream refresh credentials.** Skip this step when no
+   local identity retains one. Stop or drain the SAG process which writes the identity
+   directory, then run the offline rekey with the new secret current, the old
+   one previous, and the unchanged subject salt:
+
+   ```sh
+   SAG_SECRET="$NEW_SAG_SECRET" \
+   SAG_SECRET_PREVIOUS="$OLD_SAG_SECRET" \
+   SUBJECT_SALT="$UNCHANGED_SUBJECT_SALT" \
+     npm run generate-local-identity -- \
+       --rekey \
+       --directory /var/lib/sag/local-identities
+   ```
+
+   This reseals every retained upstream refresh token under the
+   new secret without changing its identity or security version. It is
+   idempotent. Do not continue until it completes successfully for the whole
+   directory: an inactive account will not otherwise migrate merely because
+   the session wait below elapsed. See
+   [local-identities.md](local-identities.md#disable-replace-back-up-and-restore).
+
+3. **Wait.** Long enough for every existing session to have been used at least
    once, because using a session rewrites its cookie under the new secret. One
    `SESSION_TTL` is the safe answer - by then every session has either been
    re-sealed or expired on its own.
 
-3. **Deploy without the old one.** Remove `SAG_SECRET_PREVIOUS`. Any session
+4. **Deploy without the old one.** Remove `SAG_SECRET_PREVIOUS`. Any session
    that was never used during the window is now invalid, and those people sign
    in again.
 
-Doing step 3 immediately signs everybody out. That is a legitimate thing to
+Doing step 4 immediately signs everybody out. That is a legitimate thing to
 want after a suspected compromise - it is the revocation mechanism - but it is
-not a rotation.
+not a rotation. With local identities, skipping step 2 also makes retained
+refresh tokens still sealed by the old secret unusable. Plaintext local TOTP
+seeds are independent of the master secret and need no rekey.
 
 Generate a new secret with:
 
@@ -68,8 +91,10 @@ that does not yet contain the new key will reject every token until it refetches
 ## Warning with SUBJECT_SALT
 
 Values shorter than 16 characters produce a start-up warning but are not
-rejected, because changing one is the more damaging automatic action. Changing
-it gives every person a new
+rejected for an existing upstream or email-code deployment, because changing
+one is the more damaging automatic action. The local identity backend is the
+exception: it refuses to start with a short salt because its private filename
+index needs an unguessable HMAC key. Changing a salt gives every person a new
 `sub` at every relying party, which orphans their accounts - the relying party
 sees a brand new user and the old records become unreachable. There is no
 migration path short of every relying party re-linking accounts by email.
@@ -81,11 +106,25 @@ deployment is not this - see
 `SANITISE_PLUS_EMAILS` on or off after people have signed in is: it merges or
 splits every account whose owner uses a plus tag.
 
+With local identities the salt is also the HMAC key for the filename index.
+Rotating it therefore makes every record unreachable even before a relying
+party sees the changed `sub`. Restore the old salt; there is no online rotation
+procedure.
+
 ## Suspected compromise
 
 - **Master secret leaked.** Deploy a new `SAG_SECRET` with no
   `SAG_SECRET_PREVIOUS`. Every session, transaction and code is invalidated at
-  once. Everybody signs in again.
+  once. Everybody signs in again. Do not use the routine local-identity rekey
+  to preserve refresh tokens an attacker may already have opened: revoke them
+  at their upstreams and provision new upstream credentials under the new
+  secret. Password and backup-code verifiers, and plaintext TOTP seeds, are
+  independent of the master secret and remain usable.
+- **Local identity files leaked.** TOTP seeds are plaintext. Enrol replacement
+  authenticators, reset passwords and backup codes as appropriate to the
+  compromise, revoke retained upstream refresh tokens, and increment each
+  affected record's `security_version`. Rotating `SAG_SECRET` alone cannot
+  revoke a copied authenticator seed.
 - **Signing key leaked.** Configure the new key and make it primary in one
   deployment, and remove the old key at the same time. This will break relying
   parties with a stale JWKS for as long as their cache lasts, which is the

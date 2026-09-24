@@ -4,6 +4,13 @@ SAG asserts one thing it can prove: an email address. Everything else on the
 `profile` scope either came from an upstream provider or was guessed, and the two
 should not look the same to a relying party.
 
+There is one explicit exception to the first sentence: an
+operator-provisioned local identity names an address but does not prove control
+of its mailbox. A password, TOTP, or backup-code sign-in therefore emits the
+`email` claim but omits `email_verified`. An explicitly linked upstream sign-in
+can verify that same address - see
+[local-identities.md](local-identities.md#what-a-relying-party-sees).
+
 ## Relaying from an upstream
 
 When a person signs in through Microsoft or Google, their `id_token` usually

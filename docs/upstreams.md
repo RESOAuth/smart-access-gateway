@@ -1,8 +1,9 @@
 # Adding upstream providers
 
-SAG is an identity proxy: it does not hold passwords, it relays whoever the
-person already has. Routing is by email domain, so there is one sign-in
-screen and no "choose your provider" wall.
+SAG is primarily an identity proxy: it relays whoever the person already has.
+The Node adapter can also hold a small set of operator-provisioned
+[local identities](local-identities.md). Routing is by email domain, so there
+is one sign-in screen and no deployment-wide "choose your provider" wall.
 
 ## How routing works
 
@@ -16,6 +17,11 @@ A domain-specific entry wins over `common`, and `common` wins over an email
 code. If more than one upstream serves the domain - a deployment with Microsoft,
 Google and Yahoo all configured as `common`, say - SAG reads the domain's mail
 records before asking. See [guessing the provider](#guessing-the-provider).
+
+A domain in `LOCAL_IDENTITY_DOMAINS` is deliberately different: SAG offers the
+local password screen without first checking whether an account file exists,
+and any eligible upstream remains available as an alternative. That keeps a
+missing local record from becoming an address-enumeration signal.
 
 ## Configuring one
 
@@ -65,6 +71,21 @@ UPSTREAM_GOOGLE_EXAMPLECOM_HD=example.com
 Register `https://id.example.com/callback` as the redirect URI with the
 provider. One callback serves every upstream, because which one is in flight
 travels in the sealed `state`.
+
+## Linking one upstream identity to a local identity
+
+A local record can explicitly name an upstream identity by the upstream's SAG
+configuration id, the verified issuer, and its exact `sub`. The record
+generation tool accepts those values; copying only an email address is not a
+link. At callback time SAG also requires the upstream to return the same
+canonical address.
+
+When all four values match, upstream and local authentication produce the same
+stable local `sub`. The upstream authentication can include
+`email_verified: true`; password or TOTP authentication alone omits that claim.
+If the upstream returns a refresh token on that exact exchange, SAG seals it
+into the link rather than putting it in a cookie or returning it to the relying
+party. SAG still issues no refresh token of its own.
 
 ## Guessing the provider
 

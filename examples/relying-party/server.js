@@ -376,7 +376,7 @@ const home = (session) =>
          <a class="btn alt" href="/start?prompt=none">Silent re-authentication</a>
          <a class="btn alt" href="/start?prompt=consent">Ask to confirm the account</a>
          <a class="btn alt" href="/start?prompt=login">Force a fresh sign-in</a>
-         <a class="btn alt" href="/start?acr_values=urn:sag:acr:federated-mfa">Demand MFA</a>
+         <a class="btn alt" href="/start?acr_values=urn:sag:acr:mfa">Demand MFA</a>
          <a class="btn alt" href="/userinfo">Call /userinfo</a>
          <a class="btn alt" href="/logout">Sign out</a>
        </p>

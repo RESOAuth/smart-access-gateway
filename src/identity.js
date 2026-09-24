@@ -115,11 +115,29 @@ const SEP = ' | ';
  * @returns {Promise<string>}
  */
 export async function subjectFor(config, email, client) {
+  return subjectForPrincipal(config, [email], client);
+}
+
+/**
+ * Derive a subject for an operator-provisioned local identity.
+ *
+ * The opaque record id, rather than an unverified address, keeps local and
+ * linked-upstream sign-in on one subject without colliding with an ordinary
+ * verified-email identity. See ADR 0023.
+ */
+export async function subjectForLocalIdentity(config, identityId, client) {
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(String(identityId || ''))) {
+    throw new Error('local subjects require a valid stable identity id');
+  }
+  return subjectForPrincipal(config, ['local', identityId], client);
+}
+
+async function subjectForPrincipal(config, principalParts, client) {
   const type = client?.subjectType || config.subject.type;
   const salt = config.subject.salt;
   if (!salt) throw new Error('subjects require SUBJECT_SALT to be set');
   const scope = type === 'pairwise' ? sectorFor(client) : 'public';
-  return b64u(await derive(salt, ['sub', type, scope, email].join(SEP), 24));
+  return b64u(await derive(salt, ['sub', type, scope, ...principalParts].join(SEP), 24));
 }
 
 /**

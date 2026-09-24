@@ -49,11 +49,15 @@ export async function issueCode(config, { tx, session, sub, email }) {
     resource: tx.resource?.length ? tx.resource : undefined,
     sub,
     email,
+    email_verified: session.emailVerified === true,
     acr: session.acr,
     amr: session.amr,
     auth_time: session.auth_time,
     sid: session.sid,
     claims: session.claims,
+    local_identity_id: session.localIdentityId,
+    local_identity_key: session.localIdentityKey,
+    local_security_version: session.localSecurityVersion,
     iat: now,
     exp: now + config.tokens.authorizationCodeTtlSeconds,
   };
@@ -75,6 +79,12 @@ export async function redeemCode(config, { code, clientId, redirectUri, codeVeri
     throw invalidGrant('The authorization code is invalid or has expired.');
   }
   if (payload.v !== 1) throw invalidGrant('The authorization code is invalid or has expired.');
+  // Codes minted before local identities existed had no evidence flag, and
+  // every old authentication path verified its address. Their lifetime is
+  // short, but preserving that established claim avoids a deployment race.
+  if (payload.email_verified === undefined && !payload.local_identity_id) {
+    payload.email_verified = true;
+  }
   if (payload.client_id !== clientId) {
     throw invalidGrant('The authorization code was not issued to this client.');
   }

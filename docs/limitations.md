@@ -139,7 +139,7 @@ The weakest sign-in SAG offers proves control of a mailbox at that moment. It
 is reported honestly as `urn:sag:acr:email-otp`, and a relying party that
 needs more can demand it and be refused rather than quietly satisfied.
 
-## An identity is an email address, so changing address changes the person
+## An upstream or email-code identity is an address
 
 A `sub` is derived from the verified address, which is what makes it survive a
 domain moving between upstream providers. It is also what makes a rename a new
@@ -153,3 +153,22 @@ gives every person a new `sub` everywhere, with no way to re-key anybody, so it
 is set once and never touched. Turning `SANITISE_PLUS_EMAILS` on or off after
 people have signed in merges or splits every tagged account for the same
 reason. See [ADR 0011](adr/0011-subject-derived-from-the-verified-address.md).
+
+An operator-provisioned local identity is the exception: its `sub` is derived
+from a stable random record id. Moving that record to a new address is an
+offline administrative operation and does not verify the new mailbox. See
+[ADR 0023](adr/0023-node-flat-file-local-identities.md).
+
+## A local identity directory has one writer
+
+The Node flat-file backend serialises record updates and compares revisions
+inside one process. Atomic rename prevents a torn file, but it does not make
+the read-compare-rename sequence atomic across two processes. Two SAG
+instances sharing one writable directory can therefore consume the same TOTP
+step or backup code, or overwrite each other's refresh-token update.
+
+Run exactly one SAG writer for a local identity directory. This backend is not
+available on Workers or Lambda and is not a highly available identity store;
+use an upstream identity provider when the authentication tier needs multiple
+writers. The operating rules are in
+[local-identities.md](local-identities.md).

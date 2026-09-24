@@ -23,6 +23,8 @@ export const STAGE = {
   EMAIL: 'email',
   CHOOSE: 'choose',
   OTP: 'otp',
+  LOCAL_PASSWORD: 'local-password',
+  LOCAL_MFA: 'local-mfa',
   CONTINUE: 'continue',
 };
 
@@ -108,7 +110,7 @@ export function withOtpAttempt(tx) {
 /** Discard the OTP state, for "use a different email address". */
 export function withoutOtp(tx) {
   // eslint-disable-next-line no-unused-vars
-  const { otp, email, upstream, ...rest } = tx;
+  const { otp, email, upstream, local_identity: _localIdentity, ...rest } = tx;
   return { ...rest, stage: STAGE.EMAIL };
 }
 
@@ -122,7 +124,7 @@ export function withoutOtp(tx) {
  */
 export function withoutAttempt(tx) {
   // eslint-disable-next-line no-unused-vars
-  const { otp, upstream, ...rest } = tx;
+  const { otp, upstream, local_identity: _localIdentity, ...rest } = tx;
   return rest;
 }
 
