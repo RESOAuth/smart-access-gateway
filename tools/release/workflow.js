@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
   REPOSITORY, REPOSITORY_URL, IMAGE, WORKFLOW, assetNames, expected, version,
@@ -23,6 +22,15 @@ const releaseForTag = () => {
   const matches = releases().filter(release => release.tag_name === tag);
   assert(matches.length <= 1, 'Multiple releases for tag');
   return matches[0];
+};
+const draftForId = id => {
+  assert(Number.isSafeInteger(Number(id)) && Number(id) > 0 && String(Number(id)) === String(id), 'Missing or invalid release id');
+  const release = api(`releases/${id}`);
+  assert.equal(String(release.id), String(id), 'Conflicting release id');
+  assert.equal(release.tag_name, tag, 'Conflicting release tag');
+  assert.equal(release.draft, true, 'Never change a published release');
+  assert.equal(release.prerelease, version(tag).prerelease, 'Conflicting prerelease status');
+  return release;
 };
 
 function validateSource(source) {
@@ -167,12 +175,14 @@ function stage() {
   const manifest = verifyRelease(directory, tag, commit, runId);
   let release = releaseForTag();
   if (!release) {
-    const notes = join(tmpdir(), `sag-release-${runId}.md`);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
-    writeFileSync(notes, releaseNotes(version(tag).version));
-    command('gh', ['release', 'create', tag, '--repo', REPOSITORY, '--verify-tag', '--draft',
-      '--title', tag, '--notes-file', notes, ...(version(tag).prerelease ? ['--prerelease'] : [])]);
-    release = releaseForTag();
+    const ref = api(`git/ref/tags/${tag}`);
+    assert.equal(ref.object.type, 'commit', 'Expected a workflow-created lightweight tag');
+    assert.equal(ref.object.sha, commit, 'Existing tag points to a different commit');
+    // The release list can lag behind creation and uploads; retain the returned
+    // release identity instead of rediscovering it immediately through that list.
+    release = api('releases', '--method', 'POST', '-f', `tag_name=${tag}`, '-f', `target_commitish=${commit}`,
+      '-f', `name=${tag}`, '-f', `body=${releaseNotes(version(tag).version)}`,
+      '-F', 'draft=true', '-F', `prerelease=${version(tag).prerelease}`);
   }
   assert(release?.draft, 'Never change a published release');
   assert.equal(release.prerelease, version(tag).prerelease, 'Conflicting prerelease status');
@@ -187,15 +197,15 @@ function stage() {
     command('gh', ['release', 'upload', tag, join(directory, name), '--repo', REPOSITORY]);
   }
   const staged = resolve('downloaded-release');
-  download(releaseForTag(), staged);
+  download(draftForId(release.id), staged);
   verifyRelease(staged, tag, commit, runId);
   assert.equal(JSON.parse(fileBytes(staged, 'release-manifest.json')).images[0].digest, manifest.images[0].digest);
+  output('release_id', release.id);
 }
 
 function publish() {
   const manifest = verifyRelease(resolve('downloaded-release'), tag, commit, runId);
-  const release = releaseForTag();
-  assert(release?.draft, 'Never change a published release');
+  const release = draftForId(process.env.RELEASE_ID);
   const source = manifest.images[0].reference;
   const versionTag = version(tag).version;
   const target = `${IMAGE}:${versionTag}`;
@@ -212,8 +222,8 @@ function publish() {
   }
   // Publication is last: signing, download verification, or promotion failure
   // leaves a draft and a reusable checkpoint, never a complete public release.
-  command('gh', ['release', 'edit', tag, '--repo', REPOSITORY, '--draft=false',
-    `--latest=${aliases.includes('latest') ? 'true' : 'false'}`]);
+  api(`releases/${release.id}`, '--method', 'PATCH', '-F', 'draft=false',
+    '-f', `make_latest=${aliases.includes('latest') ? 'true' : 'false'}`);
 }
 
 const [operation, ...extra] = process.argv.slice(2);

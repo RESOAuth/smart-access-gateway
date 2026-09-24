@@ -4,6 +4,12 @@ All notable changes to SAG are recorded here. Releases use semantic versions.
 
 ## Unreleased
 
+### Fixed
+
+- Release publication now retains the newly created draft and refreshes its
+  assets by release id, so a stale GitHub release listing cannot hide the
+  draft immediately after creation or omit newly uploaded assets.
+
 ## 0.3.0 - 2026-09-24
 
 ### Upgrade notes
