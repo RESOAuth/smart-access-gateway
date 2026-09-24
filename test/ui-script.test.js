@@ -10,6 +10,7 @@ function authenticator({ digits = 6, requestSubmit = true, valid = true } = {}) 
   let now = 0;
   let nextTimer = 0;
   let submissions = 0;
+  let submissionRequests = 0;
   let focuses = 0;
   const timers = new Map();
   const form = new EventTarget();
@@ -18,6 +19,7 @@ function authenticator({ digits = 6, requestSubmit = true, valid = true } = {}) 
   form.submit = () => { submissions += 1; };
   if (requestSubmit) {
     form.requestSubmit = () => {
+      submissionRequests += 1;
       if (valid && form.dispatchEvent(new Event('submit', { cancelable: true }))) submissions += 1;
     };
   }
@@ -26,7 +28,6 @@ function authenticator({ digits = 6, requestSubmit = true, valid = true } = {}) 
   input.value = '';
   input.focus = () => { focuses += 1; };
   input.getAttribute = (name) => name === 'data-submit-at' ? String(digits) : null;
-  input.checkValidity = () => valid;
   const document = {
     readyState: 'complete',
     documentElement: { setAttribute() {}, removeAttribute() {} },
@@ -51,7 +52,9 @@ function authenticator({ digits = 6, requestSubmit = true, valid = true } = {}) 
     input,
     form,
     get submissions() { return submissions; },
+    get submissionRequests() { return submissionRequests; },
     get focuses() { return focuses; },
+    set valid(value) { valid = value; },
     type(value, { composing = false } = {}) {
       input.value = value;
       const event = new Event('input');
@@ -111,42 +114,60 @@ test('eight-digit and mixed authenticators do not submit a six-digit prefix', ()
   assert.equal(browser.submissions, 1);
 });
 
-test('invalid or incomplete authenticator input never schedules a submission', () => {
+test('the wrong digit count never schedules a submission', () => {
   for (const value of ['12345', '12345 ', '1234567', '12345678', '12345a', '------', '']) {
     const browser = authenticator();
     browser.type(value);
     browser.tick(500);
+    assert.equal(browser.submissionRequests, 0, value);
     assert.equal(browser.submissions, 0, value);
   }
-  const invalid = authenticator({ valid: false });
-  invalid.type('123456');
-  invalid.tick(500);
-  assert.equal(invalid.submissions, 0, 'native validity is checked before fallback submission');
 });
 
-test('manual submission or leaving the code field cancels delayed submission', () => {
+test('native validation can reject a value without preventing auto-submit after correction', () => {
+  const invalid = authenticator({ valid: false });
+  invalid.type('123456x');
+  invalid.tick(500);
+  assert.equal(invalid.submissionRequests, 1, 'the debounce only counts digits');
+  assert.equal(invalid.input.value, '123456x', 'validation receives the original value');
+  assert.equal(invalid.submissions, 0, 'requestSubmit delegates validation to the browser');
+
+  invalid.valid = true;
+  invalid.type('123456');
+  invalid.tick(500);
+  assert.equal(invalid.submissionRequests, 2);
+  assert.equal(invalid.submissions, 1);
+  invalid.type('654321');
+  invalid.tick(500);
+  assert.equal(invalid.submissionRequests, 2, 'a successful submission still prevents duplicates');
+});
+
+test('manual submission cancels delayed submission', () => {
   const manual = authenticator();
   manual.type('123456');
   manual.form.requestSubmit();
   manual.tick(500);
   assert.equal(manual.submissions, 1);
+});
 
+test('blur and composition do not change the digit-count debounce', () => {
   const blurred = authenticator();
   blurred.type('123456');
   blurred.input.dispatchEvent(new Event('blur'));
-  blurred.tick(500);
-  assert.equal(blurred.submissions, 0, 'opening the backup form must not submit the authenticator form');
-});
+  blurred.tick(499);
+  assert.equal(blurred.submissions, 0);
+  blurred.tick(1);
+  assert.equal(blurred.submissions, 1);
 
-test('composition is left alone and the legacy submission fallback still submits once', () => {
   const composing = authenticator();
   composing.type('123456', { composing: true });
-  composing.tick(500);
+  composing.tick(499);
   assert.equal(composing.submissions, 0);
-  composing.type('123456');
-  composing.tick(500);
+  composing.tick(1);
   assert.equal(composing.submissions, 1);
+});
 
+test('the legacy submission fallback still submits once', () => {
   const fallback = authenticator({ requestSubmit: false });
   fallback.type('123456');
   fallback.tick(500);

@@ -191,14 +191,18 @@ export const DEFAULT_JS = `
       cancel();
       submitted = true;
     });
-    input.addEventListener('input', function (event) {
+    input.addEventListener('input', function () {
       cancel();
       if (!submitted && complete() && input.form) {
         timer = setTimeout(function () {
           if (submitted || !complete()) return;
-          submitted = true;
+          // requestSubmit may be blocked by native validation; only its
+          // submit event confirms that the code was actually submitted.
           if (input.form.requestSubmit) input.form.requestSubmit();
-          else input.form.submit();
+          else {
+            submitted = true;
+            input.form.submit();
+          }
         }, 500);
       }
     });
