@@ -182,21 +182,20 @@ export const DEFAULT_JS = `
     }
 
     function complete() {
-      var code = input.value.replace(/[\\s-]/g, '');
-      return expected > 0 && /^[0-9]+$/.test(code) && code.length === expected;
+      var code = input.value.replace(/\\D/g, '');
+      return expected > 0 && code.length === expected;
     }
 
     input.focus();
-    input.addEventListener('blur', cancel);
     if (input.form) input.form.addEventListener('submit', function () {
       cancel();
       submitted = true;
     });
     input.addEventListener('input', function (event) {
       cancel();
-      if (!submitted && !event.isComposing && complete() && input.form) {
+      if (!submitted && complete() && input.form) {
         timer = setTimeout(function () {
-          if (submitted || !complete() || (input.checkValidity && !input.checkValidity())) return;
+          if (submitted || !complete()) return;
           submitted = true;
           if (input.form.requestSubmit) input.form.requestSubmit();
           else input.form.submit();
