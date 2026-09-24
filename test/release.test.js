@@ -66,14 +66,22 @@ function fixture(t) {
   const remote = join(root, 'remote');
   mkdirSync(remote);
   const statePath = join(root, 'state.json');
-  writeFileSync(statePath, JSON.stringify({ calls: [], images: {}, remote, identity: policy.identity, commit: COMMIT }));
+  writeFileSync(statePath, JSON.stringify({ calls: [], images: {}, remote, identity: policy.identity, commit: COMMIT,
+    releaseRef: { ref: `refs/tags/${TAG}`, object: { type: 'commit', sha: COMMIT } } }));
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, RELEASE_TEST_STATE: statePath,
     RELEASE_TAG: TAG, RELEASE_COMMIT: COMMIT, GITHUB_RUN_ID: '12', GITHUB_RUN_ATTEMPT: '1',
     GITHUB_REPOSITORY: REPOSITORY, GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REF: `refs/tags/${TAG}`,
     GITHUB_SHA: COMMIT, GITHUB_OUTPUT: join(root, 'output') };
   const state = () => JSON.parse(readFileSync(statePath));
   const update = change => { const data = state(); change(data); writeFileSync(statePath, JSON.stringify(data)); };
-  const run = operation => spawnSync(process.execPath, [workflowScript, operation], { cwd: root, env, encoding: 'utf8' });
+  const run = operation => {
+    const result = spawnSync(process.execPath, [workflowScript, operation], { cwd: root, env, encoding: 'utf8' });
+    if (operation === 'stage' && result.status === 0) {
+      env.RELEASE_ID = readFileSync(env.GITHUB_OUTPUT, 'utf8').split('\n')
+        .filter(line => line.startsWith('release_id=')).at(-1)?.slice('release_id='.length);
+    }
+    return result;
+  };
   return { root, directory, manifest, subjects, statement, bundle, filesBundle, containerBundle, env, state, update, run };
 }
 
@@ -268,6 +276,68 @@ test('failed signature verification prevents draft creation and uploads', t => {
   assert.equal(f.state().release, undefined);
 });
 
+test('staging and publication use the created release when the release list has not caught up', t => {
+  const f = fixture(t); f.update(s => s.staleReleaseList = true);
+  passes(f.run('stage'));
+  const state = f.state();
+  assert.equal(state.release.draft, true);
+  assert.deepEqual(state.release.assets.map(asset => asset.name).sort(), assetNames(TAG));
+  assert.equal(state.calls.filter(call => call.includes('POST')).length, 1);
+  assert(state.calls.some(call => call.includes(`repos/${REPOSITORY}/releases/${state.release.id}`)));
+  assert(!state.calls.some(call => call[0] === 'docker' || call.includes('PATCH')));
+  assert.equal(f.env.RELEASE_ID, String(state.release.id));
+  passes(f.run('publish'));
+  const published = f.state();
+  assert.equal(published.release.draft, false);
+  assert.equal(published.release.make_latest, 'true');
+  assert.equal(published.images[`${IMAGE}:latest`], DIGEST);
+  const publication = published.calls.find(call => call.includes('PATCH'));
+  assert(publication.includes(`repos/${REPOSITORY}/releases/${state.release.id}`));
+  assert.deepEqual(publication.slice(-4), ['-F', 'draft=false', '-f', 'make_latest=true']);
+});
+
+test('staging refuses to create a release for an absent, moved, or annotated remote tag', t => {
+  for (const releaseRef of [null,
+    { object: { type: 'commit', sha: 'c'.repeat(40) } },
+    { object: { type: 'tag', sha: COMMIT } },
+  ]) {
+    const f = fixture(t); f.update(s => s.releaseRef = releaseRef);
+    fails(f.run('stage'), /Tag not found|different commit|lightweight tag/);
+    assert.equal(f.state().release, undefined);
+    assert(!f.state().calls.some(call => call.includes('POST') || call[2] === 'upload'));
+  }
+});
+
+test('staging never changes an already published release', t => {
+  const f = fixture(t);
+  f.update(s => s.release = { id: 45, tag_name: TAG, draft: false, prerelease: false, assets: [] });
+  fails(f.run('stage'), /Never change a published release/);
+  assert.equal(f.state().release.draft, false);
+  assert(!f.state().calls.some(call => call.includes('POST') || call.includes('PATCH') || call[0] === 'docker' || call[2] === 'upload'));
+});
+
+test('publication requires the staged release id before any promotion', t => {
+  const f = fixture(t); passes(f.run('stage'));
+  for (const id of [undefined, '', '0', '045', '45\n', '45/other', '46']) {
+    f.env.RELEASE_ID = id;
+    f.update(s => s.calls = []);
+    fails(f.run('publish'), /Missing or invalid release id|Release not found/);
+    assert.equal(f.state().release.draft, true);
+    assert(!f.state().calls.some(call => call[0] === 'docker' || call.includes('PATCH')));
+  }
+});
+
+test('publication rejects a different tag, prerelease status, or published release before promotion', t => {
+  const f = fixture(t); passes(f.run('stage'));
+  const staged = f.state().release;
+  for (const change of [{ tag_name: 'v9.9.9' }, { prerelease: true }, { draft: false }]) {
+    f.update(s => { s.release = { ...staged, ...change }; s.calls = []; });
+    fails(f.run('publish'), /Conflicting release tag|Conflicting prerelease status|Never change a published release/);
+    assert.deepEqual(f.state().release, { ...staged, ...change });
+    assert(!f.state().calls.some(call => call[0] === 'docker' || call.includes('PATCH')));
+  }
+});
+
 test('an upload failure leaves a draft and a retry fills only missing identical assets', t => {
   const f = fixture(t); f.update(s => s.fail = 'release upload v0.3.0 ' + join(f.directory, 'release-manifest.json'));
   fails(f.run('stage'));
@@ -426,5 +496,5 @@ test('completed release reruns only verify and never upload or promote', t => {
   f.update(s => s.calls = []);
   rmSync(f.directory, { recursive: true });
   passes(f.run('published'));
-  assert(!f.state().calls.some(call => call[0] === 'docker' || (call[0] === 'gh' && call[1] === 'release' && ['create', 'upload', 'edit'].includes(call[2]))));
+  assert(!f.state().calls.some(call => call[0] === 'docker' || call.includes('POST') || call.includes('PATCH') || call[2] === 'upload'));
 });

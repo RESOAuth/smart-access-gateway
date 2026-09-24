@@ -244,8 +244,11 @@ jobs:
           name: signed-release
           path: release-assets
       - name: Verify, upload missing draft assets, download, and verify again
+        id: stage
         run: node tools/release/workflow.js stage
       - name: Promote the verified digest and publish last
+        env:
+          RELEASE_ID: ${{ steps.stage.outputs.release_id }}
         run: node tools/release/workflow.js publish
 
   verify-published:

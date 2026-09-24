@@ -12,6 +12,7 @@ const save = () => writeFileSync(statePath, JSON.stringify(state));
 const result = value => { save(); process.stdout.write(typeof value === 'string' ? value : JSON.stringify(value)); };
 const fail = message => { save(); console.error(message); process.exit(1); };
 const flag = name => args[args.indexOf(name) + 1];
+const field = name => args.find((arg, index) => ['-f', '-F'].includes(args[index - 1]) && arg.startsWith(`${name}=`))?.slice(name.length + 1);
 if (state.fail && [program, ...args].join(' ').includes(state.fail)) fail('Injected external service failure');
 if (program === 'cosign') {
   if (args[0] === 'version') result({ gitVersion: 'v3.1.3' });
@@ -35,6 +36,9 @@ if (program === 'cosign') {
     if (endpoint.includes('/releases/assets/')) {
       const asset = state.release.assets.find(asset => String(asset.id) === endpoint.split('/').at(-1));
       save(); process.stdout.write(readFileSync(join(state.remote, asset.name)));
+    } else if (endpoint.includes('/git/ref/tags/')) {
+      if (!state.releaseRef) fail('Tag not found (HTTP 404)');
+      result(state.releaseRef);
     } else if (endpoint.includes('/git/matching-refs/tags/')) result(state.refs || []);
     else if (endpoint.endsWith('/git/refs') && flag('--method') === 'POST') {
       const fields = Object.fromEntries(args.filter((_, index) => args[index - 1] === '-f').map(field => field.split('=')));
@@ -43,7 +47,20 @@ if (program === 'cosign') {
       state.refs = [...(state.refs || []), ref];
       result(ref);
     } else if (endpoint.includes('event=workflow_dispatch')) result([{ workflow_runs: state.dispatchedRuns || [] }]);
-    else if (endpoint.includes('/releases?')) result([state.release ? [state.release] : []]);
+    else if (endpoint.endsWith('/releases') && flag('--method') === 'POST') {
+      if (state.release) fail('Release exists');
+      state.release = { id: 45, tag_name: field('tag_name'), draft: field('draft') === 'true',
+        prerelease: field('prerelease') === 'true', assets: [] };
+      result(state.release);
+    } else if (endpoint.includes('/releases?')) result([state.release && !state.staleReleaseList ? [state.release] : []]);
+    else if (/\/releases\/\d+$/.test(endpoint)) {
+      if (endpoint.split('/').at(-1) !== String(state.release?.id)) fail('Release not found (HTTP 404)');
+      if (flag('--method') === 'PATCH') {
+        state.release.draft = field('draft') === 'true';
+        state.release.make_latest = field('make_latest');
+      }
+      result(state.release);
+    }
     else if (endpoint.endsWith('/branches/main')) result({ protected: state.protected !== false });
     else if (endpoint.includes('/actions/workflows/')) result({ workflow_runs: [{ status: 'completed', conclusion: state.checkConclusion || 'success' }] });
     else if (endpoint.includes('/artifacts?')) result([{ artifacts: state.artifacts || [] }]);
@@ -55,9 +72,6 @@ if (program === 'cosign') {
     result('');
   } else if (args[0] === 'release') {
     switch (args[1]) {
-      case 'create':
-        state.release = { tag_name: args[2], draft: true, prerelease: args.includes('--prerelease'), assets: [] };
-        result(''); break;
       case 'upload': {
         const name = basename(args[3]);
         if (state.release.assets.some(asset => asset.name === name)) fail('Asset exists');
@@ -68,9 +82,6 @@ if (program === 'cosign') {
       case 'download':
         mkdirSync(flag('--dir'), { recursive: true });
         for (const asset of state.release.assets) copyFileSync(join(state.remote, asset.name), join(flag('--dir'), asset.name));
-        result(''); break;
-      case 'edit':
-        state.release.draft = false;
         result(''); break;
       default: fail('Unhandled release command');
     }
