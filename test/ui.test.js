@@ -12,15 +12,20 @@ import { DEFAULT_CSS } from '../src/ui/css.js';
 import { DEFAULT_JS } from '../src/ui/js.js';
 import { loadConfig } from '../src/config.js';
 import { localIdentityKey } from '../src/local-identities/index.js';
+import { encodeBase32 } from '../src/local-identities/totp.js';
 
 const EMAIL = 'person@example.org';
 
-async function localScreens() {
+async function localScreens({ totpDigits = [6] } = {}) {
   const verifier = '$argon2id$v=19$m=65536,t=3,p=1$c2FnLWxvY2FsLWR1bW15MQ$KffQgtYBtmwZAFnvnsXZ7vL8/HU8Mz58bkyIR3r/krU';
   let key;
   let record = {
     v: 1, id: 'ui-local-account', revision: 1, security_version: 1,
-    password: verifier, totp: [], backup_codes: [{ id: 'BACKUP', hash: verifier }], upstreams: [],
+    password: verifier,
+    totp: totpDigits.map((digits, index) => ({
+      id: 'authenticator-' + index, secret: encodeBase32(new Uint8Array(20).fill(index + 1)), digits,
+    })),
+    backup_codes: [{ id: 'BACKUP', hash: verifier }], upstreams: [],
   };
   const sag = createInstance({
     SUBJECT_SALT: 'ui-local-subject-salt-'.repeat(2),
@@ -254,16 +259,30 @@ test('the local password step carries username context and shares all text-field
   assert.doesNotMatch(passwordHtml, /autofocus/i);
 });
 
+test('local MFA auto-submit is an external-script enhancement', async () => {
+  const { mfaHtml } = await localScreens();
+  const totp = mfaHtml.match(/<input id="totp"[^>]+>/)[0];
+  assert.match(totp, /data-submit-at="6"/);
+  assert.deepEqual(scriptDependencies(mfaHtml), []);
+  assert.match(DEFAULT_JS, /querySelectorAll\('input\[data-submit-at\]'\)/);
+  assert.match(DEFAULT_JS, /input\.focus\(\)/);
+  assert.match(DEFAULT_JS, /code\.length === expected/);
+  assert.match(DEFAULT_JS, /input\.form\.requestSubmit\(\)/);
+  assert.match(DEFAULT_JS, /}, 500\)/);
+});
+
 test('local MFA distinguishes numeric authenticator autofill from text backup codes', async () => {
   const { sag, mfaHtml } = await localScreens();
-  assert.match(mfaHtml, /<label for="totp">Authenticator code<\/label>/);
+  assert.match(mfaHtml, /<h1 id="totp-label">Enter a verification code<\/h1>/);
   const totp = mfaHtml.match(/<input id="totp"[^>]+>/)[0];
   assert.match(totp, /name="code" type="text" class="code otp-input totp-input"/);
   assert.match(totp, /inputmode="numeric"/);
   assert.match(totp, /autocomplete="one-time-code"/);
   assert.match(totp, /aria-describedby="totp-hint"/);
-  assert.match(mfaHtml, /id="totp-hint">Enter the 6- or 8-digit code/);
-  assert.match(totp, /placeholder="123456"/);
+  assert.match(totp, /aria-labelledby="totp-label"/);
+  assert.match(mfaHtml, /id="totp-hint">Use an authenticator code for <strong>person@example\.org<\/strong>/);
+  assert.match(totp, /placeholder="XXXXXX"/);
+  assert.match(totp, /data-submit-at="6"/);
   assert.doesNotMatch(totp, /data-length/, 'do not submit a six-digit prefix of an eight-digit code');
   const pattern = new RegExp('^(?:' + totp.match(/pattern="([^"]+)"/)[1] + ')$', 'v');
   for (const value of ['012345', '01234567', '012 345', '0123-4567']) assert.ok(pattern.test(value));
@@ -290,6 +309,16 @@ test('local MFA distinguishes numeric authenticator autofill from text backup co
   assert.doesNotMatch(retry, /value="WRONG-CODE"/);
   const completed = await sag.postForm('/authorize/local-mfa', { tx: extractField(retry), code: 'BACKUP-EXAMPLE' });
   assert.equal(completed.status, 303, 'the backup form works without any JavaScript');
+});
+
+test('local MFA only auto-submits the longest configured authenticator code', async () => {
+  for (const [digits, expected] of [[[6], 6], [[8], 8], [[6, 8], 8], [[], undefined]]) {
+    const { mfaHtml } = await localScreens({ totpDigits: digits });
+    const totp = mfaHtml.match(/<input id="totp"[^>]+>/)[0];
+    if (expected) assert.ok(totp.includes('data-submit-at="' + expected + '"'));
+    else assert.doesNotMatch(totp, /data-submit-at/);
+    assert.match(totp, /minlength="6"/, 'a mixed account can still submit its shorter code manually');
+  }
 });
 
 test('an error is announced and tied to the field it refers to', async () => {

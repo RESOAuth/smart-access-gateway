@@ -14,7 +14,7 @@ Relying party and upstream provider variables have their own pages:
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `SAG_ISSUER` | derived from the request in development | The `iss` claim and the base for every URL. No trailing slash, no query |
-| `SAG_SECRET` | a well-known development value | Master secret. 48 random bytes, unique to this issuer. Protects sessions, transactions and codes, and seals local TOTP and upstream credentials |
+| `SAG_SECRET` | a well-known development value | Master secret. 48 random bytes, unique to this issuer. Protects sessions, transactions and codes, and seals retained upstream refresh credentials. Local TOTP seeds are plaintext and do not use it |
 | `SAG_SECRET_PREVIOUS` | - | The secret being retired, so a rotation does not sign everybody out and the local identity rekey can open durable credentials. See [operations.md](operations.md) |
 | `SAG_DEV` | true for localhost, `.localhost`, `.local` and `.linux.test` issuers | Forces development mode on or off |
 | `LOG_LEVEL` | `debug` in development, `info` otherwise | `debug`, `info`, `warn`, `error`, `silent` |

@@ -27,8 +27,8 @@ rotation is done in two deployments, not one.
    sealed under the old one still opens. Nobody is signed out, and anybody
    halfway through typing a code can still finish.
 
-2. **Rekey durable local credentials.** Skip this step when local identities
-   are disabled. Stop or drain the one SAG process which writes the identity
+2. **Rekey retained upstream refresh credentials.** Skip this step when no
+   local identity retains one. Stop or drain the SAG process which writes the identity
    directory, then run the offline rekey with the new secret current, the old
    one previous, and the unchanged subject salt:
 
@@ -41,7 +41,7 @@ rotation is done in two deployments, not one.
        --directory /var/lib/sag/local-identities
    ```
 
-   This reseals every TOTP seed and retained upstream refresh token under the
+   This reseals every retained upstream refresh token under the
    new secret without changing its identity or security version. It is
    idempotent. Do not continue until it completes successfully for the whole
    directory: an inactive account will not otherwise migrate merely because
@@ -59,8 +59,9 @@ rotation is done in two deployments, not one.
 
 Doing step 4 immediately signs everybody out. That is a legitimate thing to
 want after a suspected compromise - it is the revocation mechanism - but it is
-not a rotation. With local identities, skipping step 2 also makes every TOTP
-seed and retained refresh token still sealed by the old secret unusable.
+not a rotation. With local identities, skipping step 2 also makes retained
+refresh tokens still sealed by the old secret unusable. Plaintext local TOTP
+seeds are independent of the master secret and need no rekey.
 
 Generate a new secret with:
 
@@ -115,11 +116,15 @@ procedure.
 - **Master secret leaked.** Deploy a new `SAG_SECRET` with no
   `SAG_SECRET_PREVIOUS`. Every session, transaction and code is invalidated at
   once. Everybody signs in again. Do not use the routine local-identity rekey
-  to preserve secrets an attacker may already have opened: replace local TOTP
-  seeds, revoke retained refresh tokens at their upstreams, and provision new
-  upstream credentials under the new secret. Password and backup-code
-  verifiers are not encrypted with the master secret and remain usable; an
-  account whose only second factor was TOTP needs an operator recovery.
+  to preserve refresh tokens an attacker may already have opened: revoke them
+  at their upstreams and provision new upstream credentials under the new
+  secret. Password and backup-code verifiers, and plaintext TOTP seeds, are
+  independent of the master secret and remain usable.
+- **Local identity files leaked.** TOTP seeds are plaintext. Enrol replacement
+  authenticators, reset passwords and backup codes as appropriate to the
+  compromise, revoke retained upstream refresh tokens, and increment each
+  affected record's `security_version`. Rotating `SAG_SECRET` alone cannot
+  revoke a copied authenticator seed.
 - **Signing key leaked.** Configure the new key and make it primary in one
   deployment, and remove the old key at the same time. This will break relying
   parties with a stale JWKS for as long as their cache lasts, which is the

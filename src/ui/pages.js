@@ -140,20 +140,22 @@ export function localPasswordPage(ctx, { tx, email, error, action, changeAction,
 }
 
 /** TOTP or one of the identity's single-use backup codes. */
-export function localMfaPage(ctx, { tx, email, error, action, changeAction, clientLogoUri, clientLogoAlt, legal }) {
+export function localMfaPage(ctx, { tx, email, error, action, changeAction, clientLogoUri, clientLogoAlt, legal, totpDigits = [] }) {
+  // A six-digit pause may still be part of an eight-digit code. Where both
+  // are configured, the shorter code keeps its manual Verify button.
+  const submitAt = totpDigits.includes(8) ? 8 : totpDigits.includes(6) ? 6 : undefined;
   const body = `
-      <h1>Enter a verification code</h1>
-      <p class="lede">Use an authenticator code for <strong>${e(email)}</strong>.</p>
+      <h1 id="totp-label">Enter a verification code</h1>
+      <p class="lede" id="totp-hint">Use an authenticator code for <strong>${e(email)}</strong></p>
       ${errorBlock(error?.title, error?.detail)}
       <form method="post" action="${e(action)}">
         ${hiddenFields({ tx })}
         <div class="field">
-          <label for="totp">Authenticator code</label>
-          <span class="hint" id="totp-hint">Enter the 6- or 8-digit code from your authenticator app.</span>
           <input id="totp" name="code" type="text" class="code otp-input totp-input"
                  inputmode="numeric" autocomplete="one-time-code" autocapitalize="none"
                  autocorrect="off" spellcheck="false" pattern="[0-9 \\-]*"
-                 placeholder="123456" minlength="6" maxlength="64" aria-describedby="totp-hint" required
+                 placeholder="XXXXXX" minlength="6" maxlength="10"${submitAt ? ' data-submit-at="' + submitAt + '"' : ''}
+                 aria-labelledby="totp-label" aria-describedby="totp-hint" required
                  ${error ? 'aria-invalid="true"' : ''}>
         </div>
         <button type="submit" data-busy-label="Verifying...">Verify</button>

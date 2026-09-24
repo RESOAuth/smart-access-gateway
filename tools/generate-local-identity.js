@@ -17,7 +17,6 @@ import {
   newLocalIdentityId,
   normaliseLocalUpstreamLink,
   parseLocalIdentityRecord,
-  sealTotpSecret,
   sealUpstreamRefreshToken,
 } from '../src/local-identities/index.js';
 import { encodeBase32 } from '../src/local-identities/totp.js';
@@ -34,20 +33,24 @@ const HELP = `
 
   Required environment:
 
-    SAG_SECRET       seals TOTP seeds and retained upstream refresh tokens
     SUBJECT_SALT     keys filenames and stable subject identifiers; never rotate it
+
+  Conditionally required environment:
+
+    SAG_SECRET           seals retained upstream refresh tokens
+    SAG_SECRET_PREVIOUS  opens retained refresh tokens during --rekey
 
   Options:
 
     --email ADDRESS          address used to locate the identity; not stored in JSON
     --directory PATH         identity directory (or set LOCAL_IDENTITIES_DIR)
     --password-stdin         read one password, ending at the first newline
-    --totp                   generate and seal one authenticator seed
+    --totp                   generate one Base32 authenticator seed in the record
     --backup-codes NUMBER    generate and Argon2id-hash up to 20 recovery codes
     --claims FILE            JSON object of permitted OpenID Connect profile claims
     --upstreams FILE         JSON array of exact upstream links; a link may name a
                              refresh_token_env whose value is sealed into the record
-    --rekey                  reseal every durable secret after setting both
+    --rekey                  reseal retained upstream refresh tokens after setting both
                              SAG_SECRET and SAG_SECRET_PREVIOUS
     --help                   show this help
 
@@ -87,17 +90,12 @@ export function parseArguments(argv) {
 }
 
 function toolConfig(env) {
-  // Match config.js exactly: deployment environment strings are trimmed
-  // before use. Otherwise a shell-added space could create a filename or
-  // ciphertext which the running instance can never find or open.
-  const current = String(env.SAG_SECRET || '').trim();
-  const previous = String(env.SAG_SECRET_PREVIOUS || '').trim();
+  // Match config.js exactly: a shell-added space must not create a filename
+  // which the running instance can never find.
   const salt = String(env.SUBJECT_SALT || '').trim();
-  if (current.length < 32) throw new Error('SAG_SECRET must contain at least 32 characters');
   if (salt.length < 16) throw new Error('SUBJECT_SALT must contain at least 16 characters and must never rotate');
-  if (previous && previous.length < 32) throw new Error('SAG_SECRET_PREVIOUS must contain at least 32 characters');
   return {
-    secrets: [current, previous].filter(Boolean),
+    secrets: [],
     subject: { salt },
     profile: { claims: PROFILE_CLAIMS, showPicture: true },
     localIdentities: {
@@ -107,6 +105,16 @@ function toolConfig(env) {
       totpSkew: 1,
     },
   };
+}
+
+function requiredSecret(env, name) {
+  // Match config.js trimming so a value sealed here can be opened by the
+  // running instance. Ordinary provisioning never calls this helper: a
+  // password, Base32 TOTP seed, backup code, or identifier needs no SAG secret.
+  // eslint-disable-next-line security/detect-object-injection -- name is one of two fixed environment-variable names
+  const value = String(env[name] || '').trim();
+  if (value.length < 32) throw new Error(name + ' must contain at least 32 characters');
+  return value;
 }
 
 async function boundedJson(path, description) {
@@ -210,13 +218,19 @@ async function upstreamLinks(config, source, env, identityId) {
     const link = normaliseLocalUpstreamLink(candidate, links.length);
     if (!link) throw new Error('an upstream link is malformed or contains an unsupported value');
     if (raw.refresh_token_env) {
+      const currentSecret = requiredSecret(env, 'SAG_SECRET');
       const variable = String(raw.refresh_token_env);
       if (!/^[A-Z_][A-Z0-9_]*$/.test(variable)) throw new Error('refresh_token_env is not a valid environment variable name');
       // eslint-disable-next-line security/detect-object-injection -- the operator deliberately names the source environment variable
       const token = env[variable];
       if (!token) throw new Error(variable + ' is empty or unset');
       if (String(token).length > 16384) throw new Error(variable + ' is too large to store');
-      link.refresh_token = await sealUpstreamRefreshToken(config, identityId, link, String(token));
+      link.refresh_token = await sealUpstreamRefreshToken(
+        { ...config, secrets: [currentSecret] },
+        identityId,
+        link,
+        String(token),
+      );
     }
     links.push(link);
   }
@@ -257,7 +271,7 @@ export async function provision(options, { env = process.env, input = process.st
       algorithm: 'SHA1',
       digits: 6,
       period: 30,
-      secret: await sealTotpSecret(config, identityId, id, totpSecret),
+      secret: totpSecret,
     });
   }
 
@@ -305,7 +319,10 @@ export async function provision(options, { env = process.env, input = process.st
 
 export async function rekey(options, { env = process.env, output = console.log } = {}) {
   const config = toolConfig(env);
-  if (config.secrets.length < 2) throw new Error('--rekey requires SAG_SECRET_PREVIOUS');
+  const currentSecret = requiredSecret(env, 'SAG_SECRET');
+  if (!String(env.SAG_SECRET_PREVIOUS || '').trim()) throw new Error('--rekey requires SAG_SECRET_PREVIOUS');
+  const previousSecret = requiredSecret(env, 'SAG_SECRET_PREVIOUS');
+  config.secrets = [currentSecret, previousSecret];
   const directory = resolve(options.directory || env.LOCAL_IDENTITIES_DIR || '');
   if (!options.directory && !env.LOCAL_IDENTITIES_DIR) throw new Error('--directory or LOCAL_IDENTITIES_DIR is required');
   const binding = createFileLocalIdentityStore(directory);

@@ -99,6 +99,12 @@ is copied from its read-only mount into the writable data volume. TOTP replay
 state is therefore persisted and updated in `/data`, while the source fixture
 is never changed. The copy is owner-only inside the container.
 
+The seed is plaintext Base32 in `totp[].secret`; it does not depend on
+`SAG_SECRET`. An existing volume from the earlier sealed-TOTP draft needs an
+offline format conversion before running the updated gateway. Do not replace
+the whole record just to change its seed representation: preserve its stable
+id, password, backup codes, and TOTP replay marker.
+
 The headless verifier uses these development-only credentials:
 
 ```text

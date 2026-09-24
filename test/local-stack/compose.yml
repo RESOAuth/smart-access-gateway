@@ -141,7 +141,7 @@ services:
   # A second Node instance keeps the platform matrix above intact while adding
   # the one authentication method that deliberately belongs only on a local
   # filesystem. Its master secret and subject salt are public development
-  # values so the committed fixture can be opened after it is copied into the
+  # values; the committed plaintext-TOTP fixture is copied into the
   # named data volume. The signing key is still generated into that volume and
   # survives a restart.
   sag-local:

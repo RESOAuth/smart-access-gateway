@@ -9,7 +9,7 @@ import { normaliseEmail, domainOf } from '../identity.js';
 import { b64u, randomToken, toHex, utf8 } from '../util/bytes.js';
 import { relayedClaims } from '../profile.js';
 import { PROFILE_CLAIMS } from '../config.js';
-import { decodeBase32, verifyTotp } from './totp.js';
+import { decodeBase32, encodeBase32, verifyTotp } from './totp.js';
 
 const RECORD_VERSION = 1;
 const MAX_TOTP = 5;
@@ -45,8 +45,6 @@ const approvedArgon2id = (value) =>
 const DUMMY_PASSWORD_HASH =
   '$argon2id$v=19$m=65536,t=3,p=1$c2FnLWxvY2FsLWR1bW15MQ$KffQgtYBtmwZAFnvnsXZ7vL8/HU8Mz58bkyIR3r/krU';
 
-const TOTP_PURPOSE = (identityId, credentialId) =>
-  'local-identity-totp/' + identityId + '/' + credentialId;
 const REFRESH_PURPOSE = (identityId, linkId) =>
   'local-identity-refresh/' + identityId + '/' + linkId;
 
@@ -106,13 +104,19 @@ function normaliseTotp(value) {
   const digits = value.digits ?? 6;
   const period = value.period ?? 30;
   if (![6, 8].includes(digits) || integer(period, { min: 15, max: 120 }) === undefined) return undefined;
-  if (typeof value.secret !== 'string' || value.secret.length < 20 || value.secret.length > 8192) return undefined;
+  if (typeof value.secret !== 'string' || value.secret.length > 256) return undefined;
+  let secret;
+  try {
+    secret = encodeBase32(decodeBase32(value.secret));
+  } catch {
+    return undefined;
+  }
   const lastUsedStep = value.last_used_step;
   if (lastUsedStep !== undefined && integer(lastUsedStep) === undefined) return undefined;
   return {
     id: value.id,
     ...(value.label === undefined ? {} : { label: value.label.slice(0, 128) }),
-    secret: value.secret,
+    secret,
     algorithm,
     digits,
     period,
@@ -207,6 +211,9 @@ export function parseLocalIdentityRecord(config, doc, key) {
   const upstreams = rawUpstreams.map(normaliseLocalUpstreamLink);
   if (totp.includes(undefined) || backupCodes.includes(undefined) || upstreams.includes(undefined)) return undefined;
   if (new Set(totp.map((item) => item.id)).size !== totp.length) return undefined;
+  // Replay markers are per credential. Reusing a seed under another id would
+  // let the same code spend one unused marker after another.
+  if (new Set(totp.map((item) => item.secret)).size !== totp.length) return undefined;
   if (new Set(backupCodes.map((item) => item.id)).size !== backupCodes.length) return undefined;
   if (new Set(upstreams.map((item) => item.id)).size !== upstreams.length) return undefined;
   if (doc.mfa_required === false && (totp.length || backupCodes.length)) return undefined;
@@ -269,31 +276,6 @@ function storedRecord(record) {
     backup_codes: record.backup_codes.map((item) => ({ ...item })),
     upstreams: record.upstreams.map((item) => ({ ...item })),
   };
-}
-
-async function openTotp(config, record, credential) {
-  const purpose = TOTP_PURPOSE(record.id, credential.id);
-  let current = true;
-  let payload;
-  try {
-    payload = await unseal(config.secrets[0], purpose, credential.secret);
-  } catch {
-    current = false;
-    payload = await unseal(config.secrets, purpose, credential.secret);
-  }
-  if (
-    payload?.v !== 1 ||
-    payload.identity_id !== record.id ||
-    payload.credential_id !== credential.id ||
-    typeof payload.secret !== 'string'
-  ) {
-    throw new SealError('TOTP secret is bound to a different identity or credential');
-  }
-  // Treat an authenticated but malformed payload like any other unusable
-  // credential. Interactive verification can then continue to another TOTP,
-  // while offline rekey fails loudly instead of preserving bad material.
-  decodeBase32(payload.secret);
-  return { secret: payload.secret, current };
 }
 
 async function openRefreshToken(config, record, link) {
@@ -411,14 +393,8 @@ export function createLocalIdentityStore(config, env) {
     }
 
     for (const credential of record.totp) {
-      let opened;
-      try {
-        opened = await openTotp(config, record, credential);
-      } catch {
-        continue;
-      }
       const step = await verifyTotp({
-        secret: opened.secret,
+        secret: credential.secret,
         code,
         now,
         algorithm: credential.algorithm,
@@ -429,16 +405,9 @@ export function createLocalIdentityStore(config, env) {
       });
       if (step === undefined) continue;
       if (!consume) return { method: 'totp', record };
-      let replacementSecret;
-      if (!opened.current) {
-        replacementSecret = await sealTotpSecret(config, record.id, credential.id, opened.secret);
-      }
       const updated = await replace(record, (next) => {
         const held = next.totp.find((item) => item.id === credential.id);
-        if (held) {
-          held.last_used_step = step;
-          if (replacementSecret) held.secret = replacementSecret;
-        }
+        if (held) held.last_used_step = step;
         return next;
       });
       return updated ? { method: 'totp', record: updated } : undefined;
@@ -491,19 +460,8 @@ export function createLocalIdentityStore(config, env) {
   };
 
   const rekeyRecord = async (record) => {
-    const totp = [];
     const upstreams = [];
     let changed = false;
-    for (const credential of record.totp) {
-      const opened = await openTotp(config, record, credential);
-      if (!opened.current) changed = true;
-      totp.push({
-        ...credential,
-        secret: opened.current
-          ? credential.secret
-          : await sealTotpSecret(config, record.id, credential.id, opened.secret),
-      });
-    }
     for (const link of record.upstreams) {
       if (!link.refresh_token) {
         upstreams.push({ ...link });
@@ -519,7 +477,7 @@ export function createLocalIdentityStore(config, env) {
       });
     }
     if (!changed) return { record, changed: false };
-    const updated = await replace(record, (next) => ({ ...next, totp, upstreams }));
+    const updated = await replace(record, (next) => ({ ...next, upstreams }));
     if (!updated) throw new Error('local identity changed while it was being rekeyed');
     return { record: updated, changed: true };
   };
@@ -554,15 +512,6 @@ export function createLocalIdentityStore(config, env) {
     requiresSecondFactor: (record) => record?.mfa_required === true,
   };
 }
-
-/** Seal a TOTP secret for a record being provisioned. */
-export const sealTotpSecret = (config, identityId, credentialId, secret) =>
-  seal(config.secrets[0], TOTP_PURPOSE(identityId, credentialId), {
-    v: 1,
-    identity_id: identityId,
-    credential_id: credentialId,
-    secret,
-  });
 
 /** Seal a pre-provisioned upstream refresh credential. */
 export const sealUpstreamRefreshToken = (config, identityId, link, token) =>

@@ -1,7 +1,6 @@
 // RFC 6238 time-based one-time passwords.
 //
-// The secret is decrypted by the local identity store before it reaches this
-// module. Keeping the actual TOTP calculation on Web Crypto means the core
+// Keeping the actual TOTP calculation on Web Crypto means the core
 // remains portable even though the first identity-store backend is Node-only.
 
 import { timingSafeEqual } from '../util/bytes.js';

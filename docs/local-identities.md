@@ -4,7 +4,8 @@ The Node adapter can authenticate a small set of identities from private JSON
 files. This is for operator-provisioned accounts on a single SAG process. It
 is not registration, a self-service directory, or a portable identity-store
 backend. The boundary and its reasons are in
-[ADR 0023](adr/0023-node-flat-file-local-identities.md).
+[ADR 0023](adr/0023-node-flat-file-local-identities.md), with plaintext TOTP
+storage defined by [ADR 0025](adr/0025-plaintext-local-totp-seeds.md).
 
 ## Before enabling it
 
@@ -13,8 +14,8 @@ Local authentication requires:
 - Node.js 24.7.0 or newer with `crypto.argon2`;
 - a persistent directory with exactly one SAG process writing it;
 - an explicit, high-entropy `SUBJECT_SALT` which will never rotate;
-- the same `SAG_SECRET` used by the running instance, so the provisioning tool
-  can seal TOTP and upstream credentials; and
+- the running instance's `SAG_SECRET` only when provisioning sealed upstream
+  refresh credentials; and
 - a `STATE_STORE_BACKEND`, because password and second-factor attempt limits
   fail closed when there is no atomic counter.
 
@@ -59,9 +60,11 @@ The complete limits and defaults are in
 ## Provision a record
 
 Use `tools/generate-local-identity.js`; do not construct password hashes or
-sealed values by hand. Run it with the exact `SAG_SECRET`, `SUBJECT_SALT`, and
-identity directory used by the instance. The password is accepted only on
-standard input, never as an argument:
+sealed refresh credentials by hand. Run it with the exact `SUBJECT_SALT` and
+identity directory used by the instance. Passwords, TOTP seeds, backup codes,
+and upstream links without refresh tokens can be provisioned without
+`SAG_SECRET`. The password is accepted only on standard input, never as an
+argument:
 
 ```sh
 printf '%s\n' "$LOCAL_IDENTITY_PASSWORD" |
@@ -80,8 +83,10 @@ interface.
 
 The tool prints newly generated TOTP and backup-code material once; capture it
 through the intended secure handover channel. Its output is secret and must
-not enter a build log. Neither the plaintext password nor plaintext factor
-secrets belong in the JSON file, shell history, logs, or a source repository.
+not enter a build log. Passwords and backup codes are stored only as Argon2id
+verifiers. TOTP seeds are deliberately plaintext Base32 in the private JSON
+file so a management utility does not need the gateway's sealing key. Never
+put real credentials in shell history, logs, or a source repository.
 
 Optional profile claims come from a JSON object passed with `--claims`. Only
 the fixed OpenID Connect profile allow-list is accepted, for example:
@@ -103,9 +108,9 @@ the replacement record. The security-version change is what invalidates old
 sessions and unredeemed codes. A replacement with a new random id also gives
 the person a new `sub` at every relying party.
 
-Generated sealed values are bound to the random id created with them, so do
-not copy a generated TOTP or refresh-token ciphertext onto a record whose
-`id` differs. A password verifier is not identity-bound and can be generated
+Generated refresh-token ciphertexts are bound to the random id created with
+them, so do not copy one onto a record whose `id` differs. A password verifier
+is not identity-bound and can be generated
 in a separate empty directory, then copied into a stopped writer's existing
 record. Write the finished JSON through a mode `0600` temporary file and
 atomic rename; do not edit a live record in place.
@@ -128,8 +133,7 @@ The versioned JSON record contains:
 - a durable MFA-required marker when any second factor was provisioned;
 - one PHC-format Argon2id password verifier;
 - bounded OpenID Connect profile claims;
-- up to five TOTP credentials, whose seeds are purpose-bound AES-256-GCM
-  values sealed from `SAG_SECRET`;
+- up to five TOTP credentials, whose seeds are plaintext Base32 values;
 - up to twenty single-use backup codes, each retained only as an Argon2id
   verifier; and
 - up to twenty explicit upstream links, each matching a configured upstream
@@ -153,6 +157,29 @@ distributed lock: never point two SAG processes or a separate live editor at
 the same writable directory.
 
 ## TOTP and backup codes
+
+Each TOTP entry has a stable credential id and a `secret` containing the
+Base32 seed, plus optional `label`, `algorithm` (`SHA1`, `SHA256`, or `SHA512`),
+`digits` (6 or 8), and `period` (15 to 120 seconds). Defaults are SHA1, six
+digits, and thirty seconds. SAG validates the seed, normalises it to uppercase
+unpadded Base32, and maintains `last_used_step` for replay prevention. Seeds
+must decode to at least 80 bits; the generator uses 160 bits.
+Each credential must have a distinct seed, including after Base32
+normalisation, so duplicate entries cannot bypass per-credential replay state.
+
+Reading a record now reveals its authenticator seed. Restrict the directory,
+encrypt backups, and treat read access as access to that second factor.
+Changing `SAG_SECRET` neither changes nor invalidates a TOTP seed. An external
+manager can generate and replace these credentials without `SAG_SECRET`, but
+still needs `SUBJECT_SALT` to locate records by email and must respect the
+single-writer and security-version rules above.
+
+The earlier, unreleased draft stored sealed TOTP values. Those ciphertexts
+are no longer accepted as `secret`: convert them offline using the old
+deployment's sealing key, or enrol a replacement seed. Preserve the replay
+marker when converting the same seed. A replacement seed must reset its
+replay marker and increment `security_version`. Do not distribute the old
+sealing key to the new management application.
 
 A record with any TOTP credential or backup code requires a second factor
 after its password. TOTP accepts the configured number of time steps either
@@ -244,8 +271,11 @@ The password page supplies the selected username and `current-password`
 autocomplete hints. The MFA page gives authenticator codes a numeric keypad
 and `one-time-code` autocomplete; backup codes have a separate text field
 under **Use a backup code**, so their letters and hyphens remain enterable.
-Both forms work without JavaScript. Codes are submitted explicitly, because
-six digits may be only the prefix of a configured eight-digit TOTP.
+Both forms work without JavaScript. With script enabled, a complete
+authenticator code is submitted after a 500 ms pause. The longest configured
+TOTP length controls auto-submit: an eight-digit or mixed-length identity
+cannot auto-submit a six-digit prefix. A six-digit code for a mixed-length
+identity remains manually submittable.
 
 ## Disable, replace, back up, and restore
 
@@ -256,19 +286,20 @@ unredeemed codes. Tokens already issued keep their ordinary short lifetime.
 Changing only `revision` coordinates a file update and does not revoke
 credentials.
 
-Back up the directory, `SUBJECT_SALT`, `SAG_SECRET`, and any still-active
-`SAG_SECRET_PREVIOUS` as one set. The salt is required to find a record and to
-reproduce its `sub`; the master secret is required to open TOTP and upstream
-credentials. A backup missing either is not a restorable identity store.
+Back up the private directory and `SUBJECT_SALT`; the salt is required to find
+a record and reproduce its `sub`. If any upstream refresh credentials are
+retained, also preserve `SAG_SECRET` and any still-active
+`SAG_SECRET_PREVIOUS` needed to open them. Encrypt and restrict backups because
+they contain plaintext TOTP seeds.
 
 Changing an address means creating the HMAC-named file for the new canonical
 address with the same stable identity id, then removing the old file while SAG
 is stopped. It does not verify the new mailbox. There is intentionally no live
 rename workflow, automatic merge, or reuse of a deleted identity id.
 
-Master-secret rotation needs extra care because local TOTP and refresh
+Master-secret rotation needs extra care when retained upstream refresh
 credentials outlive a session. Keep the old secret in `SAG_SECRET_PREVIOUS`
-until the offline rekey has completed:
+until their offline rekey has completed. TOTP-only identities need no rekey:
 
 ```sh
 SAG_SECRET="$NEW_SAG_SECRET" \
@@ -280,7 +311,7 @@ SUBJECT_SALT="$UNCHANGED_SUBJECT_SALT" \
 ```
 
 Stop or drain the one SAG writer first. The command conditionally replaces
-every TOTP and refresh-token ciphertext still using the previous secret,
+every refresh-token ciphertext still using the previous secret,
 leaves `security_version` unchanged, and is safe to run again. It refuses to
 continue past a malformed or undecryptable record; fix that error and rerun it
 before removing `SAG_SECRET_PREVIOUS`. The full order is in

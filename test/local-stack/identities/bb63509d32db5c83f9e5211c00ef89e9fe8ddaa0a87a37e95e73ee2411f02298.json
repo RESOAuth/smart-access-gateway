@@ -12,7 +12,7 @@
       "algorithm": "SHA1",
       "digits": 6,
       "period": 30,
-      "secret": "k1.local-identity-totp/H-EBN6rtgS3nEKRSEqrKPrK6/hcD_Gr2aYYXS.zD-1uTtRToVf14SU.-tZQjRpXsHOWbp04wv5cHHhDbl93vPU-CnIE5o-jj5fBy6l7m7SVdlkTYP0oKBxZ164lSrhQx8g7rlMR8rMPRuiOl2J_RinTlTFSiKeelgZlQeptIKNeZeeQ1otuIgxHGNE4eE2WzWPnYJbseU_oFEEyOt3NRm0K1tKAoLh6GvrD8y2BzG-EQrjDcA"
+      "secret": "CMTADK6EESB3ORC5GFPEWRXOYBQMMWCX"
     }
   ],
   "backup_codes": [

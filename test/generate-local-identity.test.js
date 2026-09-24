@@ -11,7 +11,8 @@ import { join } from 'node:path';
 import { createFileLocalIdentityStore } from '../adapters/node/local-identities.js';
 import { loadConfig } from '../src/config.js';
 import { SealError, unseal } from '../src/crypto/secrets.js';
-import { localIdentityKey } from '../src/local-identities/index.js';
+import { createLocalIdentityStore, localIdentityKey } from '../src/local-identities/index.js';
+import { totpForStep } from '../src/local-identities/totp.js';
 import {
   main,
   parseArguments,
@@ -92,6 +93,8 @@ test('the local identity tool parses only its documented, secret-safe arguments'
   const output = [];
   assert.equal(await main(['--help'], { output: (line) => output.push(line) }), undefined);
   assert.match(output.join('\n'), /Passwords are accepted only on standard input|--password-stdin/);
+  assert.match(output.join('\n'), /Base32 authenticator seed in the record/);
+  assert.match(output.join('\n'), /SAG_SECRET\s+seals retained upstream refresh tokens/);
   await assert.rejects(
     main(['--rekey', '--email', EMAIL], { env: {}, output: () => {} }),
     /--rekey cannot be combined/,
@@ -103,24 +106,35 @@ test('the local identity tool parses only its documented, secret-safe arguments'
     }),
     /--rekey requires SAG_SECRET_PREVIOUS/,
   );
+  await assert.rejects(
+    rekey(
+      { directory: '/tmp/unused-local-identities' },
+      {
+        env: {
+          SUBJECT_SALT,
+          SAG_SECRET_PREVIOUS: PREVIOUS_SECRET,
+        },
+        output: () => {},
+      },
+    ),
+    /SAG_SECRET must contain at least 32 characters/,
+  );
+  await assert.rejects(
+    rekey(
+      { directory: '/tmp/unused-local-identities' },
+      {
+        env: toolEnv('/tmp/unused-local-identities', { SAG_SECRET_PREVIOUS: 'too-short' }),
+        output: () => {},
+      },
+    ),
+    /SAG_SECRET_PREVIOUS must contain at least 32 characters/,
+  );
 });
 
 test('identity creation rejects incomplete or unsafe input before writing', async (t) => {
   const { directory } = await temporaryDirectory(t);
   const options = { email: EMAIL, password_stdin: true, directory };
 
-  await assert.rejects(
-    provision(options, { env: { SUBJECT_SALT }, input: passwordInput(), output: () => {} }),
-    /SAG_SECRET must contain at least 32 characters/,
-  );
-  await assert.rejects(
-    provision(options, {
-      env: { SAG_SECRET: ' '.repeat(40), SUBJECT_SALT },
-      input: passwordInput(),
-      output: () => {},
-    }),
-    /SAG_SECRET must contain at least 32 characters/,
-  );
   await assert.rejects(
     provision(options, {
       env: { SAG_SECRET: CURRENT_SECRET, SUBJECT_SALT: ' '.repeat(20) },
@@ -191,11 +205,23 @@ test('identity creation rejects incomplete or unsafe input before writing', asyn
   );
 });
 
-test('provision writes a private opaque record with sealed TOTP and Argon2id backup codes', async (t) => {
+test('provision without SAG_SECRET writes plaintext Base32 TOTP and hashed backup codes', async (t) => {
   if (!requireArgon2(t)) return;
   const { root, directory } = await temporaryDirectory(t);
   const claimsPath = join(root, 'claims.json');
+  const upstreamsPath = join(root, 'upstreams.json');
   await writeFile(claimsPath, JSON.stringify({ name: 'Jamie Taylor' }));
+  await writeFile(
+    upstreamsPath,
+    JSON.stringify([
+      {
+        id: 'work',
+        upstream: 'oidc/work',
+        issuer: 'https://login.example.test',
+        subject: 'opaque-upstream-subject',
+      },
+    ]),
+  );
   const output = [];
 
   const result = await provision(
@@ -206,12 +232,13 @@ test('provision writes a private opaque record with sealed TOTP and Argon2id bac
       totp: true,
       backup_codes: '2',
       claims: claimsPath,
+      upstreams: upstreamsPath,
     },
     {
-      env: toolEnv(directory, {
-        SAG_SECRET: '  ' + CURRENT_SECRET + ' \t',
+      env: {
+        LOCAL_IDENTITIES_DIR: directory,
         SUBJECT_SALT: '\n' + SUBJECT_SALT + '  ',
-      }),
+      },
       input: Readable.from([Buffer.from(PASSWORD + '\r\nignored second line\n')]),
       output: (line) => output.push(line),
     },
@@ -227,10 +254,12 @@ test('provision writes a private opaque record with sealed TOTP and Argon2id bac
   assert.match(record.password, /^\$argon2id\$/);
   assert.equal(record.totp.length, 1);
   assert.equal(record.backup_codes.length, 2);
-  assert.equal(record.upstreams.length, 0);
+  assert.equal(record.upstreams.length, 1);
+  assert.equal(record.upstreams[0].id, 'work');
+  assert.equal(Object.hasOwn(record.upstreams[0], 'refresh_token'), false);
   assert.equal(raw.includes(EMAIL), false);
   assert.equal(raw.includes(PASSWORD), false);
-  assert.equal(raw.includes(result.totpSecret), false);
+  assert.equal(raw.includes(result.totpSecret), true);
   const runtimeConfig = loadConfig({
     SAG_ISSUER: 'http://localhost:8787',
     SAG_SECRET: CURRENT_SECRET,
@@ -249,22 +278,27 @@ test('provision writes a private opaque record with sealed TOTP and Argon2id bac
   }
 
   const credential = record.totp[0];
-  const totpPayload = await unseal(
-    CURRENT_SECRET,
-    'local-identity-totp/' + record.id + '/' + credential.id,
-    credential.secret,
-  );
-  assert.deepEqual(totpPayload, {
-    v: 1,
-    identity_id: record.id,
-    credential_id: credential.id,
-    secret: result.totpSecret,
-  });
+  assert.equal(credential.secret, result.totpSecret);
   assert.match(result.totpSecret, /^[A-Z2-7]{32}$/);
   assert.ok(output.some((line) => line === 'TOTP secret: ' + result.totpSecret));
   assert.ok(output.some((line) => line.startsWith('TOTP URI: otpauth://totp/')));
   assert.ok(output.includes('Backup codes (shown once):'));
   for (const code of result.backupCodes) assert.ok(output.includes('  ' + code));
+
+  const rotatedConfig = loadConfig({
+    SAG_ISSUER: 'http://localhost:8787',
+    SAG_SECRET: 'an-unrelated-secret-after-rotation-0123456789',
+    SUBJECT_SALT,
+    LOCAL_IDENTITIES_BACKEND: 'file',
+    LOCAL_IDENTITY_DOMAINS: 'example.test',
+    STATE_STORE_BACKEND: 'memory',
+  });
+  const localStore = createLocalIdentityStore(rotatedConfig, { SAG_LOCAL_IDENTITIES: store });
+  const found = await localStore.find(EMAIL);
+  const now = 59_000;
+  const code = await totpForStep(result.totpSecret, 1);
+  const verified = await localStore.verifySecondFactor(found.record, code, now);
+  assert.equal(verified?.method, 'totp', 'SAG_SECRET rotation must not make the independent TOTP seed unusable');
 });
 
 test('provision refuses to overwrite an existing address', async (t) => {
@@ -302,10 +336,32 @@ test('upstream refresh tokens come only from the named environment variable and 
   };
   await writeFile(upstreamPath, JSON.stringify([link]));
 
+  for (const sagSecret of [undefined, 'too-short']) {
+    await assert.rejects(
+      provision(
+        { email: EMAIL, directory, password_stdin: true, upstreams: upstreamPath },
+        {
+          env: {
+            SUBJECT_SALT,
+            LOCAL_IDENTITIES_DIR: directory,
+            WORK_REFRESH_TOKEN: REFRESH_TOKEN,
+            ...(sagSecret === undefined ? {} : { SAG_SECRET: sagSecret }),
+          },
+          input: passwordInput(),
+          output: () => {},
+        },
+      ),
+      /SAG_SECRET must contain at least 32 characters/,
+    );
+  }
+
   const result = await provision(
     { email: EMAIL, directory, password_stdin: true, upstreams: upstreamPath },
     {
-      env: toolEnv(directory, { WORK_REFRESH_TOKEN: REFRESH_TOKEN }),
+      env: toolEnv(directory, {
+        SAG_SECRET: '  ' + CURRENT_SECRET + ' \t',
+        WORK_REFRESH_TOKEN: REFRESH_TOKEN,
+      }),
       input: passwordInput(),
       output: () => {},
     },
@@ -354,7 +410,7 @@ test('upstream refresh tokens come only from the named environment variable and 
   );
 });
 
-test('rekey reseals TOTP and refresh credentials without changing their plaintext', async (t) => {
+test('rekey leaves plaintext TOTP alone and reseals only upstream refresh credentials', async (t) => {
   if (!requireArgon2(t)) return;
   const { root, directory } = await temporaryDirectory(t);
   const upstreamPath = join(root, 'upstreams.json');
@@ -398,13 +454,11 @@ test('rekey reseals TOTP and refresh credentials without changing their plaintex
   const after = (await storedRecord(directory, provisioned.key)).record;
   assert.equal(after.revision, before.revision + 1);
   assert.equal(after.password, before.password);
-  assert.notEqual(after.totp[0].secret, before.totp[0].secret);
+  assert.equal(after.totp[0].secret, before.totp[0].secret);
+  assert.equal(after.totp[0].secret, provisioned.totpSecret);
   assert.notEqual(after.upstreams[0].refresh_token, before.upstreams[0].refresh_token);
-  const totpPurpose = 'local-identity-totp/' + after.id + '/' + after.totp[0].id;
   const refreshPurpose = 'local-identity-refresh/' + after.id + '/' + after.upstreams[0].id;
-  assert.equal((await unseal(CURRENT_SECRET, totpPurpose, after.totp[0].secret)).secret, provisioned.totpSecret);
   assert.equal((await unseal(CURRENT_SECRET, refreshPurpose, after.upstreams[0].refresh_token)).token, REFRESH_TOKEN);
-  await assert.rejects(unseal(PREVIOUS_SECRET, totpPurpose, after.totp[0].secret), SealError);
   await assert.rejects(unseal(PREVIOUS_SECRET, refreshPurpose, after.upstreams[0].refresh_token), SealError);
 
   assert.deepEqual(

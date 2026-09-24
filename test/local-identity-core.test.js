@@ -1,5 +1,5 @@
-// Portable local-identity primitives: strict records, TOTP and sealed mutable
-// credentials. The filesystem and native Argon2 boundary has its own tests.
+// Portable local-identity primitives: strict records, plaintext TOTP, and
+// sealed refresh credentials. The filesystem and Argon2 have their own tests.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,7 +11,6 @@ import {
   newCredentialId,
   newLocalIdentityId,
   parseLocalIdentityRecord,
-  sealTotpSecret,
   sealUpstreamRefreshToken,
 } from '../src/local-identities/index.js';
 import {
@@ -135,7 +134,7 @@ test('local identity records are bounded, canonical and reject malformed credent
       {
         id: 'phone',
         label: 'x'.repeat(140),
-        secret: 'sealed-secret-placeholder',
+        secret: 'gezd-gnbv gy3tqojqgezdgnbvgy3tqojq====',
         algorithm: 'sha-256',
         digits: 8,
         period: 60,
@@ -156,6 +155,7 @@ test('local identity records are bounded, canonical and reject malformed credent
   assert.equal(parsed.disabled, true);
   assert.equal(parsed.mfa_required, true);
   assert.equal(parsed.totp[0].algorithm, 'SHA256');
+  assert.equal(parsed.totp[0].secret, 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ');
   assert.equal(parsed.totp[0].label.length, 128);
   assert.equal(parsed.backup_codes[0].id, 'RECOVERY');
   assert.equal(parsed.upstreams[0].id, 'upstream-1');
@@ -196,6 +196,10 @@ test('local identity records are bounded, canonical and reject malformed credent
     { ...document(), totp: [{ ...valid.totp[0], digits: 7 }] },
     { ...document(), totp: [{ ...valid.totp[0], period: 2 }] },
     { ...document(), totp: [{ ...valid.totp[0], secret: 'short' }] },
+    { ...document(), totp: [{ ...valid.totp[0], secret: 'k1.local-identity-totp/sealed.payload' }] },
+    { ...document(), totp: [{ ...valid.totp[0], secret: '' }] },
+    { ...document(), totp: [{ ...valid.totp[0], secret: 123 }] },
+    { ...document(), totp: [{ ...valid.totp[0], secret: 'A'.repeat(257) }] },
     { ...document(), totp: [{ ...valid.totp[0], last_used_step: -1 }] },
     { ...document(), backup_codes: [null] },
     { ...document(), backup_codes: [{ ...valid.backup_codes[0], unexpected: true }] },
@@ -228,6 +232,10 @@ test('local identity records are bounded, canonical and reject malformed credent
     { ...document(), upstreams: [{ upstream: 'google:test', issuer: 'https://issuer.test#fragment', subject: 'sub' }] },
     { ...document(), upstreams: [{ upstream: 'google:test', issuer: 'https://issuer.test', subject: 'sub', id: '/' }] },
     { ...document(), totp: [valid.totp[0], valid.totp[0]] },
+    {
+      ...document(),
+      totp: [valid.totp[0], { ...valid.totp[0], id: 'same-seed', secret: parsed.totp[0].secret }],
+    },
     { ...document(), backup_codes: [valid.backup_codes[0], valid.backup_codes[0]] },
     {
       ...document(),
@@ -357,23 +365,10 @@ test('backup codes are one-use compare-and-swap credentials', async () => {
   assert.equal(await brokenVerifier.verifySecondFactor(found.record, code), undefined);
 });
 
-test('TOTP secrets are bound, replay-protected and opportunistically re-sealed', async () => {
-  const oldConfig = configWith({ SAG_SECRET: PREVIOUS_SECRET });
-  const rotated = configWith({ SAG_SECRET_PREVIOUS: PREVIOUS_SECRET });
-  const key = await localIdentityKey(rotated, EMAIL);
+test('plaintext TOTP needs no sealing key and retains replay protection and conditional writes', async () => {
+  const config = { ...configWith(), secrets: [] };
+  const key = await localIdentityKey(config, EMAIL);
   const secret = encodeBase32(new TextEncoder().encode('12345678901234567890'));
-  const oldCiphertext = await sealTotpSecret(oldConfig, RECORD_ID, 'primary', secret);
-  const malformedCiphertext = await sealTotpSecret(
-    oldConfig,
-    RECORD_ID,
-    'malformed',
-    'invalid!base32-secret-long-enough',
-  );
-  const wrongBinding = await seal(
-    rotated.secrets[0],
-    'local-identity-totp/' + RECORD_ID + '/wrong-binding',
-    { v: 1, identity_id: 'another-record', credential_id: 'wrong-binding', secret },
-  );
   const now = 59_000;
   const code = await totpForStep(secret, 1, { digits: 8 });
   const binding = memoryBinding(
@@ -382,29 +377,27 @@ test('TOTP secrets are bound, replay-protected and opportunistically re-sealed',
         key,
         document({
           totp: [
-            { id: 'broken', secret: 'not-a-sealed-value-long-enough', algorithm: 'SHA1', digits: 8, period: 30 },
-            { id: 'wrong-binding', secret: wrongBinding, algorithm: 'SHA1', digits: 8, period: 30 },
-            { id: 'malformed', secret: malformedCiphertext, algorithm: 'SHA1', digits: 8, period: 30 },
-            { id: 'primary', secret: oldCiphertext, algorithm: 'SHA1', digits: 8, period: 30 },
+            { id: 'other', secret: 'JBSWY3DPEHPK3PXP', algorithm: 'SHA1', digits: 6, period: 30 },
+            { id: 'primary', secret, algorithm: 'SHA1', digits: 8, period: 30 },
           ],
         }),
       ],
     ]),
   );
-  const store = createLocalIdentityStore(rotated, { SAG_LOCAL_IDENTITIES: binding });
+  const store = createLocalIdentityStore(config, { SAG_LOCAL_IDENTITIES: binding });
   const found = await store.find(EMAIL);
   assert.equal(await store.verifySecondFactor(found.record, '00000000', now), undefined);
   const refused = await store.verifySecondFactor(found.record, code, now, { consume: false });
   assert.equal(refused.method, 'totp');
   assert.equal(binding.records.get(key).revision, 1);
-  assert.equal(binding.records.get(key).totp[3].last_used_step, undefined);
+  assert.equal(binding.records.get(key).totp[1].last_used_step, undefined);
   const result = await store.verifySecondFactor(found.record, code, now);
   assert.equal(result.method, 'totp');
-  assert.equal(result.record.totp[3].last_used_step, 1);
-  assert.notEqual(result.record.totp[3].secret, oldCiphertext);
+  assert.equal(result.record.totp[1].last_used_step, 1);
+  assert.equal(result.record.totp[1].secret, secret);
   assert.equal(await store.verifySecondFactor(result.record, code, now), undefined, 'the same time-step is one use');
 
-  const losing = createLocalIdentityStore(rotated, {
+  const losing = createLocalIdentityStore(config, {
     SAG_LOCAL_IDENTITIES: { ...binding, replace: async () => false },
   });
   const nextCode = await totpForStep(secret, 2, { digits: 8 });
@@ -452,7 +445,7 @@ test('session checks support record keys and legacy address lookup', async () =>
   );
 });
 
-test('sealed local credentials can be rekeyed across master-secret rotation', async () => {
+test('refresh credentials can be rekeyed without changing plaintext TOTP', async () => {
   const oldConfig = configWith({ SAG_SECRET: PREVIOUS_SECRET });
   const rotated = configWith({ SAG_SECRET_PREVIOUS: PREVIOUS_SECRET });
   const key = await localIdentityKey(rotated, EMAIL);
@@ -463,10 +456,9 @@ test('sealed local credentials can be rekeyed across master-secret rotation', as
     issuer: 'https://accounts.example.test',
     subject: 'upstream-subject',
   };
-  const oldTotp = await sealTotpSecret(oldConfig, RECORD_ID, 'primary', secret);
   const oldRefresh = await sealUpstreamRefreshToken(oldConfig, RECORD_ID, link, 'refresh-value');
   const raw = document({
-    totp: [{ id: 'primary', secret: oldTotp, algorithm: 'SHA1', digits: 6, period: 30 }],
+    totp: [{ id: 'primary', secret, algorithm: 'SHA1', digits: 6, period: 30, last_used_step: 4 }],
     upstreams: [
       { ...link, refresh_token: oldRefresh },
       { id: 'without-token', upstream: 'google:other', issuer: 'https://other.example.test', subject: 'sub' },
@@ -478,7 +470,7 @@ test('sealed local credentials can be rekeyed across master-secret rotation', as
   const changed = await store.rekeyRecord(record);
   assert.equal(changed.changed, true);
   assert.equal(changed.record.revision, 2);
-  assert.notEqual(changed.record.totp[0].secret, oldTotp);
+  assert.deepEqual(changed.record.totp, record.totp);
   assert.notEqual(changed.record.upstreams[0].refresh_token, oldRefresh);
 
   const unchanged = await store.rekeyRecord(changed.record);
@@ -520,18 +512,20 @@ test('bulk rekey counts changed records and rejects malformed input', async () =
   const oldConfig = configWith({ SAG_SECRET: PREVIOUS_SECRET });
   const rotated = configWith({ SAG_SECRET_PREVIOUS: PREVIOUS_SECRET });
   const secret = encodeBase32(new TextEncoder().encode('12345678901234567890'));
-  const oldCiphertext = await sealTotpSecret(oldConfig, RECORD_ID, 'old', secret);
-  const currentCiphertext = await sealTotpSecret(rotated, 'second-record', 'current', secret);
+  const link = { id: 'work', upstream: 'google:test', issuer: 'https://issuer.test', subject: 'sub' };
+  const oldCiphertext = await sealUpstreamRefreshToken(oldConfig, RECORD_ID, link, 'refresh-value');
+  const currentCiphertext = await sealUpstreamRefreshToken(rotated, 'second-record', link, 'refresh-value');
   const firstKey = 'a'.repeat(64);
   const secondKey = 'b'.repeat(64);
   const binding = memoryBinding(
     new Map([
-      [firstKey, document({ totp: [{ id: 'old', secret: oldCiphertext, algorithm: 'SHA1', digits: 6, period: 30 }] })],
+      [firstKey, document({ upstreams: [{ ...link, refresh_token: oldCiphertext }] })],
       [
         secondKey,
         document({
           id: 'second-record',
-          totp: [{ id: 'current', secret: currentCiphertext, algorithm: 'SHA1', digits: 6, period: 30 }],
+          totp: [{ id: 'primary', secret, algorithm: 'SHA1', digits: 6, period: 30 }],
+          upstreams: [{ ...link, refresh_token: currentCiphertext }],
         }),
       ],
     ]),

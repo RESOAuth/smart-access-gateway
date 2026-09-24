@@ -235,13 +235,14 @@ async function renderLocalPassword(ctx, { tx, error }) {
   );
 }
 
-async function renderLocalMfa(ctx, { tx, error }) {
+async function renderLocalMfa(ctx, { tx, error, totpDigits }) {
   const sealed = await sealTransaction(ctx.config, advance(tx, { stage: STAGE.LOCAL_MFA }));
   return html(
     localMfaPage(ctx, {
       tx: sealed,
       email: tx.email,
       error,
+      totpDigits,
       clientLogoUri: tx.logo_uri,
       clientLogoAlt: tx.client_name,
       legal: legalFor(ctx.config, tx),
@@ -640,6 +641,7 @@ export async function handleLocalPassword(ctx) {
 
   if (requiresSecondFactor) {
     return renderLocalMfa(ctx, {
+      totpDigits: found.record.totp.map((credential) => credential.digits),
       tx: advance(tx, {
         local_identity: {
           id: found.record.id,
@@ -699,7 +701,11 @@ export async function handleLocalMfa(ctx) {
         identity: found.key.slice(0, 12),
       });
     }
-    return renderLocalMfa(ctx, { tx, error: LOCAL_CREDENTIAL_ERROR });
+    return renderLocalMfa(ctx, {
+      tx,
+      error: LOCAL_CREDENTIAL_ERROR,
+      totpDigits: expected ? found.record.totp.map((credential) => credential.digits) : [],
+    });
   }
 
   return completeLocalAuthentication(ctx, {
