@@ -49,3 +49,4 @@ decision here leaves open.
 | [0023](0023-node-flat-file-local-identities.md) | Local identities are operator-managed, Node-only flat files |
 | [0024](0024-method-neutral-mfa-requirement.md) | A method-neutral MFA requirement accepts local or federated MFA without changing the reported method |
 | [0025](0025-plaintext-local-totp-seeds.md) | Local TOTP seeds are plaintext so credential management does not require the gateway's sealing key |
+| [0026](0026-microsoft-consumer-accounts-use-consumer-mx.md) | Common Microsoft upstreams accept personal accounts with consumer MX without `xms_edov` |

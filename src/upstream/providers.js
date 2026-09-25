@@ -6,6 +6,8 @@
 // UPSTREAM_..._AUTHORIZATION_ENDPOINT style variable for a provider that is
 // almost, but not quite, one of these.
 
+export const MICROSOFT_CONSUMER_TENANT_ID = '9188040d-6c67-4c5b-b112-36a304b66dad';
+
 export const PROVIDERS = {
   microsoft: {
     label: 'Microsoft',
@@ -30,7 +32,7 @@ export const PROVIDERS = {
       if (!u.isCommon) p.domain_hint = u.domain;
       return p;
     },
-    verifyClaims: (u, claims) => {
+    verifyClaims: (u, claims, { consumerMx = false } = {}) => {
       const tid = String(claims.tid || '').toLowerCase();
       // The strongest bound available on a multi-tenant upstream, and the only
       // one that is about who is asserting rather than what they asserted:
@@ -43,10 +45,9 @@ export const PROVIDERS = {
         if (verified === false) {
           throw new Error('Microsoft reports that this address is not in a domain the tenant has verified');
         }
-        // With no tenant list and no domain of its own, xms_edov is the only
-        // thing standing between this upstream and any tenant administrator
-        // asserting any address.
-        if (!u.allowedTenants?.length && verified !== true) {
+        // The consumer tenant owns personal Microsoft accounts. An Entra
+        // tenant still needs xms_edov, even when the address has consumer MX.
+        if (!u.allowedTenants?.length && verified !== true && !(tid === MICROSOFT_CONSUMER_TENANT_ID && consumerMx)) {
           throw new Error('this Microsoft upstream accepts any tenant, so it needs the xms_edov claim to trust an address');
         }
         return;

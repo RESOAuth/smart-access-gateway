@@ -1180,9 +1180,9 @@ export function loadConfig(env = {}, opts = {}) {
     },
 
     dns: {
-      // Guessing which upstream serves a domain from its mail records, used
-      // only when more than one upstream could take the address and the person
-      // would otherwise be asked to choose. See docs/upstreams.md.
+      // Guessing which upstream serves a domain from its mail records. The
+      // Microsoft consumer-account check also reads MX at callback, even when
+      // provider hints are off. See docs/upstreams.md.
       hint: oneOf(env, 'SIGNIN_PROVIDER_HINT', ['off', 'order', 'select'], 'select'),
       // DNS-over-HTTPS, for a runtime with no resolver of its own. Both the
       // Node and the Cloudflare adapters supply a platform resolver as a
@@ -1239,8 +1239,8 @@ export function loadConfig(env = {}, opts = {}) {
   // A `common` Microsoft upstream accepts any tenant Microsoft will federate,
   // and a `sub` here is derived from the address alone, so an unbounded one
   // lets any tenant administrator assert any address. Without ALLOWED_TENANTS
-  // the only remaining bound is the xms_edov claim, which has to be added to
-  // the app registration before Entra sends it. See ADR 0019.
+  // Entra needs xms_edov unless a tenant list bounds it. A personal Microsoft
+  // account can use its consumer tenant id and MX instead. See ADR 0026.
   for (const upstream of upstreams) {
     if (upstream.allowedTenants.length && upstream.provider !== 'microsoft') {
       internalWarnings.push(
@@ -1250,10 +1250,10 @@ export function loadConfig(env = {}, opts = {}) {
     }
     if (upstream.provider !== 'microsoft' || !upstream.isCommon || upstream.allowedTenants.length) continue;
     internalWarnings.push(
-      'Upstream ' + upstream.id + ' accepts any Microsoft tenant, and nothing bounds the addresses it may assert. ' +
+      'Upstream ' + upstream.id + ' accepts any Microsoft Entra tenant, and nothing bounds the addresses it may assert. ' +
         'Set UPSTREAM_' + upstream.provider.toUpperCase() + '_' + upstream.slug.toUpperCase() + '_ALLOWED_TENANTS, or add ' +
-        'the xms_edov optional claim to the app registration; until one of the two is done, sign-ins through this ' +
-        'upstream are refused. See docs/adr/0019-a-common-upstream-must-bound-what-it-may-assert.md.',
+        'the xms_edov optional claim to the app registration; without one of the two, Entra sign-ins through this ' +
+        'upstream are refused. Personal Microsoft accounts with consumer MX are exempt. See docs/adr/0026-microsoft-consumer-accounts-use-consumer-mx.md.',
     );
   }
 
