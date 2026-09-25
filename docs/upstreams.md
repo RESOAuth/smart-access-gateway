@@ -96,7 +96,7 @@ because an organisation whose identity is at Microsoft has its mail there too:
 ```sh
 SIGNIN_PROVIDER_HINT=select   # read the records and go straight there (default)
 SIGNIN_PROVIDER_HINT=order    # still ask, but put the likely one first
-SIGNIN_PROVIDER_HINT=off      # never look
+SIGNIN_PROVIDER_HINT=off      # do not use DNS to choose a provider
 ```
 
 Two records are consulted, in order.
@@ -130,7 +130,7 @@ UPSTREAM_OIDC_YAHOO_MAIL_PROVIDER=yahoo
 
 ### What it is not
 
-It is a guess, and nothing rests on it. A domain owner can publish whatever
+The provider hint is a guess, and nothing rests on it. A domain owner can publish whatever
 records they like, and all that gets them is a redirect to a provider that will
 refuse to authenticate them. Every guess is checked against the upstreams that
 were already eligible for the address, and the upstream still validates its own
@@ -138,9 +138,10 @@ tenant or hosted domain afterwards. When the guess is wrong and the upstream
 refuses, the person lands on the chooser with every option offered and nothing
 suggested - not at a dead end.
 
-Nothing is looked up unless there is a real ambiguity: one candidate, or a
-domain-specific upstream the operator has already decided about, means no query
-at all.
+Provider hints look up records only when there is a real ambiguity: one
+candidate, or a domain-specific upstream the operator has already decided
+about, means no query for routing. The Microsoft consumer-account check below
+is separate and reads MX at callback.
 
 ### Where the query goes
 
@@ -149,7 +150,7 @@ asks whatever resolver it is already configured to trust and no query leaves the
 deployment. The Cloudflare adapter hands it `node:dns`, which the Workers
 runtime resolves itself. Lambda has no resolver, so it uses DNS-over-HTTPS -
 Cloudflare's by default, and `DNS_RESOLVER_URL` points it anywhere that speaks
-the same JSON. Answers are cached per instance for an hour.
+the same JSON. Provider hints are cached per instance for an hour.
 
 On Workers the DNS-over-HTTPS fallback is not merely slower, it does not work:
 a Worker's own `fetch` to a public DNS-over-HTTPS endpoint does not come back,
@@ -158,8 +159,9 @@ not resolve the client metadata host". Setting `DNS_RESOLVER_URL` there
 overrides the resolver that does work.
 
 That does mean a Lambda deployment on the default tells a public DNS service
-which domains are signing in, and only when the chooser would otherwise have
-appeared. `SIGNIN_PROVIDER_HINT=off` if that is not a trade you want. On
+which domains reach the chooser or the Microsoft consumer-account check.
+`SIGNIN_PROVIDER_HINT=off` disables routing lookups, while the consumer check
+still needs MX. On
 Workers the query goes to the runtime's own resolver instead, which is
 Cloudflare either way - it is their platform - but it is no longer a `fetch` to
 a third party.
@@ -205,13 +207,22 @@ has had the domain of that address verified:
 }
 ```
 
-A `common` Microsoft upstream needs one of the two, and refuses sign-ins until
-it has one; SAG warns at start-up about the tenant list, because it cannot see
-your app registration. `ALLOWED_TENANTS` is the stronger of the two where you
-can use it - it bounds who is asserting, which a directory administrator
-cannot change, rather than what they asserted. An `xms_edov` of `false` is
-refused either way. See
+An Entra ID sign-in through a `common` Microsoft upstream needs one of the two
+and is refused until it has one; SAG warns at start-up about the tenant list,
+because it cannot see your app registration. `ALLOWED_TENANTS` is the stronger
+of the two where you can use it - it bounds who is asserting, which a directory
+administrator cannot change, rather than what they asserted. An `xms_edov` of
+`false` is refused either way. See
 [ADR 0019](adr/0019-a-common-upstream-must-bound-what-it-may-assert.md).
+
+Personal Microsoft accounts, such as `jamie@outlook.com`, do not send
+`xms_edov`. For these accounts, SAG accepts an absent claim only when the token
+has Microsoft's consumer tenant id and every MX record for the token's email
+domain ends in `.olc.protection.outlook.com`. An MX ending in
+`.mail.protection.outlook.com` still needs `xms_edov` unless the tenant is on
+the allow list. An absent or inconclusive MX answer also keeps the claim
+requirement. This check runs even with `SIGNIN_PROVIDER_HINT=off`. See
+[ADR 0026](adr/0026-microsoft-consumer-accounts-use-consumer-mx.md).
 
 ## What the relying party sees
 

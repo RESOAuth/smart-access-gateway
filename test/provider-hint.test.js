@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createInstance, pkce, authorizeUrl, extractField } from './harness.js';
-import { mailProviderFor, clearMailProviderCache } from '../src/upstream/dns.js';
+import { mailProviderFor, microsoftConsumerMx, clearMailProviderCache } from '../src/upstream/dns.js';
 import { loadConfig } from '../src/config.js';
 
 /**
@@ -109,6 +109,26 @@ test('each provider is recognised from its MX records', async (t) => {
     const ctx = { config, env: { SAG_DNS: stubResolver({ [domain]: zone }) } };
     assert.deepEqual(await mailProviderFor(ctx, domain), { provider: expected, source: 'mx' }, domain);
   }
+});
+
+test('only a consumer MX suffix qualifies for the Microsoft personal-account exception', async () => {
+  const config = loadConfig({ SAG_ISSUER: 'http://localhost:8787' });
+  const zones = {
+    'outlook.com': { MX: ['5 outlook-com.olc.protection.outlook.com.'] },
+    'hotmail.com': { MX: ['5 hotmail-com.olc.protection.outlook.com.'] },
+    'enterprise.test': { MX: ['0 enterprise-test.mail.protection.outlook.com.'] },
+    'mixed.test': { MX: ['5 outlook-com.olc.protection.outlook.com.', '10 other.test.'] },
+    'imposter.test': { MX: ['5 outlook-com.olc.protection.outlook.com.evil.test.'] },
+    'empty.test': { MX: [] },
+  };
+  const resolver = stubResolver(zones);
+  const ctx = { config, env: { SAG_DNS: resolver } };
+  assert.equal(await microsoftConsumerMx(ctx, 'outlook.com'), true);
+  assert.equal(await microsoftConsumerMx(ctx, 'hotmail.com'), true);
+  for (const domain of ['enterprise.test', 'mixed.test', 'imposter.test', 'empty.test', 'bad/domain.test']) {
+    assert.equal(await microsoftConsumerMx(ctx, domain), false, domain);
+  }
+  assert.ok(!resolver.asked.includes('MX bad/domain.test'));
 });
 
 test('SPF is consulted when a mail gateway hides the MX answer', async () => {

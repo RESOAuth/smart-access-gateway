@@ -140,6 +140,19 @@ async function resolve(ctx, domain, type) {
 /** `10 mail.protection.outlook.com.` -> `mail.protection.outlook.com` */
 const mxHost = (data) => data.trim().split(/\s+/).pop().replace(/\.$/, '');
 
+function validMailDomain(domain) {
+  if (!domain || domain.length > 253) return false;
+  const labels = domain.split('.');
+  return labels.length >= 2 && labels.every((l) => Boolean(l) && l.length <= 63 && /^[a-z0-9-]+$/.test(l) && !l.startsWith('-') && !l.endsWith('-'));
+}
+
+/** The consumer mail route is useful only alongside Microsoft's consumer tenant id. */
+export async function microsoftConsumerMx(ctx, domain) {
+  if (!validMailDomain(domain)) return false;
+  const records = await resolve(ctx, domain, 'MX');
+  return records.length > 0 && records.every((record) => mxHost(record).endsWith('.olc.protection.outlook.com'));
+}
+
 function matchMx(records) {
   for (const record of records) {
     const host = mxHost(record);
@@ -170,11 +183,7 @@ export async function mailProviderFor(ctx, domain) {
   if (!domain || ctx.config.dns.hint === 'off') return undefined;
   // A hostname, and nothing that could be read as anything else: this value
   // goes into a URL and, on the Node adapter, into a resolver call.
-  if (domain.length > 253) return undefined;
-  const labels = domain.split('.');
-  if (labels.length < 2 || !labels.every((l) => Boolean(l) && l.length <= 63 && /^[a-z0-9-]+$/.test(l) && !l.startsWith('-') && !l.endsWith('-'))) {
-    return undefined;
-  }
+  if (!validMailDomain(domain)) return undefined;
 
   const cached = cache.get(domain);
   if (cached && cached.expiresAt > nowSeconds()) return cached.result;

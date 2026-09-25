@@ -11,6 +11,7 @@ import { PROVIDERS } from '../src/upstream/providers.js';
 import { loadConfig } from '../src/config.js';
 
 const UPSTREAM_CLIENT = 'upstream-client-id';
+const MICROSOFT_CONSUMER_TENANT = '9188040d-6c67-4c5b-b112-36a304b66dad';
 
 /** Configure one generic OIDC upstream pointing at the stub. */
 function upstreamEnv(stub, { slug = 'ACME', domain = 'acme.test', extra = {} } = {}) {
@@ -437,6 +438,61 @@ test('a common Microsoft upstream with no tenant list needs xms_edov', () => {
   // Entra has emitted the claim as a string as well as a boolean.
   assert.doesNotThrow(() => verify(upstream, { tid, xms_edov: 'true' }));
   assert.throws(() => verify(upstream, { tid, xms_edov: 'false' }), /not in a domain the tenant has verified/);
+});
+
+test('a personal Microsoft account with consumer MX signs in without xms_edov', async (t) => {
+  clearUpstreamMetadataCache();
+  clearJwksCache();
+  const issuer = 'https://login.microsoftonline.test/' + MICROSOFT_CONSUMER_TENANT + '/v2.0';
+  const stub = await createStubProvider({ issuer });
+  t.after(stub.install());
+  const asked = [];
+  const sag = createInstance({
+    UPSTREAM_MICROSOFT_COMMON_CLIENT_ID: 'common:' + UPSTREAM_CLIENT,
+    UPSTREAM_MICROSOFT_COMMON_ISSUER: issuer,
+    UPSTREAM_MICROSOFT_COMMON_AUTHORIZATION_ENDPOINT: stub.metadata.authorization_endpoint,
+    UPSTREAM_MICROSOFT_COMMON_TOKEN_ENDPOINT: stub.metadata.token_endpoint,
+    UPSTREAM_MICROSOFT_COMMON_JWKS_URI: stub.metadata.jwks_uri,
+    SIGNIN_PROVIDER_HINT: 'off',
+    SAG_DNS: {
+      resolve(domain, type) {
+        asked.push(type + ' ' + domain);
+        return Promise.resolve(domain === 'outlook.com'
+          ? ['10 outlook-com.olc.protection.outlook.com.']
+          : ['10 enterprise-test.mail.protection.outlook.com.']);
+      },
+    },
+  });
+
+  const back = await signInVia(stub, sag, 'jamie@outlook.com', {
+    tid: MICROSOFT_CONSUMER_TENANT,
+    email: 'jamie@outlook.com',
+  });
+  assert.equal(back.status, 303);
+  assert.ok(new URL(back.headers.get('location')).searchParams.get('code'));
+  assert.deepEqual(asked, ['MX outlook.com']);
+
+  sag.clearCookies();
+  const wrongAddress = await signInVia(stub, sag, 'jamie@outlook.com', {
+    tid: MICROSOFT_CONSUMER_TENANT,
+    email: 'jamie@enterprise.test',
+  });
+  assert.equal(wrongAddress.status, 400);
+  assert.deepEqual(asked, ['MX outlook.com', 'MX enterprise.test'], 'the token address determines the MX lookup');
+});
+
+test('consumer MX never excuses an Entra tenant from xms_edov', () => {
+  const verify = PROVIDERS.microsoft.verifyClaims;
+  const upstream = { provider: 'microsoft', isCommon: true, allowedTenants: [] };
+  assert.throws(
+    () => verify(upstream, { tid: '99999999-9999-9999-9999-999999999999' }, { consumerMx: true }),
+    /xms_edov/,
+  );
+  assert.doesNotThrow(() => verify(upstream, { tid: MICROSOFT_CONSUMER_TENANT }, { consumerMx: true }));
+  assert.throws(
+    () => verify(upstream, { tid: MICROSOFT_CONSUMER_TENANT, xms_edov: false }, { consumerMx: true }),
+    /not in a domain the tenant has verified/,
+  );
 });
 
 test('an unverified email domain is refused even from an allowed tenant', () => {

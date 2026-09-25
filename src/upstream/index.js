@@ -15,7 +15,8 @@ import { randomToken, nowSeconds } from '../util/bytes.js';
 import { sha256b64u } from '../crypto/secrets.js';
 import { fetchJwks, selectJwk, verifyCompact, decodeJwt, validateClaims } from '../crypto/jose.js';
 import { domainOf, normaliseEmail } from '../identity.js';
-import { providerFor, labelFor } from './providers.js';
+import { providerFor, labelFor, MICROSOFT_CONSUMER_TENANT_ID } from './providers.js';
+import { microsoftConsumerMx } from './dns.js';
 
 const metadataCache = new Map();
 const MAX_METADATA_CACHE_ENTRIES = 100;
@@ -249,7 +250,11 @@ export async function completeUpstream(ctx, upstream, { code, stateTx }) {
     maxAge: stateTx.max_age,
     allowHttp: config.devMode,
   });
-  provider.verifyClaims(upstream, claims);
+  const consumerMx = upstream.provider === 'microsoft' && upstream.isCommon &&
+    !upstream.allowedTenants?.length && claims.xms_edov == null &&
+    String(claims.tid || '').toLowerCase() === MICROSOFT_CONSUMER_TENANT_ID &&
+    await microsoftConsumerMx(ctx, domainOf(claims.email));
+  provider.verifyClaims(upstream, claims, { consumerMx });
 
   // `preferred_username` and `upn` are login identifiers, not assertions that
   // the mailbox exists and belongs to this account. On a domain-specific
