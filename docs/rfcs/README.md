@@ -56,6 +56,7 @@ are not reused. Numbers identify proposals, not implementation priority.
 | [0020](0020-resource-and-scope-contract.md) | Resource and scope contract |
 | [0021](0021-upstream-claim-contracts.md) | Upstream claim contracts |
 | [0022](0022-device-authorisation.md) | Device authorisation |
+| [0023](0023-domain-discovery-and-cimd-federation.md) | Domain discovery and CIMD federation |
 
 Sign outbound requests to relying parties and upstreams was also on the
 backlog this replaced, but it already had a decision -
