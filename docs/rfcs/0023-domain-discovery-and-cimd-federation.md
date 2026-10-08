@@ -1,15 +1,15 @@
 # 0023. Domain discovery and CIMD federation
 
 Status: Proposed
-Checked: 2026-09-29
-Repository baseline: `1ed6fb2cd37eade4ba0b73c0c543e434526a324b`
+Checked: 2026-10-07
+Repository baseline: `5788bda`
 
 ## Context
 
-A domain owner should be able to run a small SAG instance, authenticate only
-addresses at that domain with email OTP, and publish where it lives. Another
-SAG should discover that issuer and use it without a bilateral client
-registration or shared client secret.
+A domain owner should be able to publish an OpenID Connect issuer for its
+addresses. The issuer may be a small SAG instance using email OTP or another
+provider that supports the required OIDC and CIMD capabilities. A broker SAG
+should discover it without bilateral client registration or a shared secret.
 
 For example, `example.org` delegates to `https://idp.example.org`. The hosted
 gateway at `https://auth.resoauth.cloud` remains the application's issuer, but
@@ -28,16 +28,19 @@ authority over an email domain.
 | [WebFinger, RFC 7033](https://www.rfc-editor.org/rfc/rfc7033.html), and [OIDC Discovery 1.0](https://openid.net/specs/openid-connect-discovery-1_0.html) | Published RFC and final OpenID specification | Existing identifier-to-issuer discovery, then provider metadata. |
 | [OAuth server metadata, RFC 8414](https://www.rfc-editor.org/rfc/rfc8414.html) | Published RFC | Endpoints and capabilities once the issuer is known; not domain delegation. |
 | [CIMD -02](https://www.ietf.org/archive/id/draft-ietf-oauth-client-id-metadata-document-02.html) | Active OAuth WG Internet-Draft, 6 July 2026; not an RFC | URL client identifiers and fetched client metadata without prior registration. |
+| [JWT client authentication updates -11](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-rfc7523bis-11) | Active OAuth WG Internet-Draft, 28 April 2026; not an RFC | Proposes the authorisation server issuer as the sole client-assertion audience. |
 | [OpenID Federation 1.1](https://openid.net/specs/openid-federation-1_1.html) and [Federation for OpenID Connect 1.1](https://openid.net/specs/openid-federation-connect-1_1.html) | Final, 5 May 2026; 1.0 was final on 17 February 2026 | Signed trust chains, metadata policy, and automatic client registration for governed federations. Automatic registration uses asymmetric authentication. |
-| [DNS-based OIDC Discovery -01](https://datatracker.ietf.org/doc/draft-sanz-openid-dns-discovery/) | Individual draft, last revised April 2018; expired and archived | Close precedent: `_openid` TXT records. Not an adopted DNS discovery standard. |
+| [DNS-based OIDC Discovery -01](https://datatracker.ietf.org/doc/html/draft-sanz-openid-dns-discovery-01) | Individual draft, last revised April 2018; expired and archived | Defines `_openid` TXT records with `v=OID1;iss=...`. This proposal uses a restricted domain-wide subset, not a current standard. |
 | [Dynamic Client Registration, RFC 7591](https://www.rfc-editor.org/rfc/rfc7591.html) | Published RFC | Alternative onboarding with a registration request and server-issued client identifier. |
 | [Protected Resource Metadata, RFC 9728](https://www.rfc-editor.org/rfc/rfc9728.html) | Published RFC | An API can advertise its `authorization_servers`; it does not identify the home IdP for an email address. |
 
 The research found no current standard that combines DNS-only email-domain
-delegation with CIMD onboarding. This RFC proposes a small SAG profile over
-existing protocols. The DNS label and `urn:sag:*` fields below are experimental
-SAG conventions, not IETF or OpenID registrations. They make no claim to
-compatibility with the expired DNS draft.
+delegation with CIMD onboarding. This RFC uses the `_openid` name and core
+`v=OID1;iss=` syntax from the expired DNS draft, with a narrower profile for
+domain-wide email delegation. It does not implement the draft's per-address
+`_openidemail` lookup or `clp` claims-provider feature, and does not claim that
+the draft is an adopted standard. The protocol adds no SAG-specific DNS tag or
+provider metadata requirement.
 
 [URI records, RFC 7553](https://www.rfc-editor.org/rfc/rfc7553.html), can carry
 an issuer URL; [SVCB/HTTPS, RFC 9460](https://www.rfc-editor.org/rfc/rfc9460.html),
@@ -57,9 +60,13 @@ The relevant implementation is [upstream routing](../../src/upstream/index.js),
   MX/SPF hints choose between already eligible providers; they confer no trust.
 - Incoming CIMD exists, but SAG does not publish its own upstream client
   document. Discovery currently uses `urn:sag:client_registration.cimd`, not
-  the standard draft capability name.
+  `client_id_metadata_document_supported` from the CIMD draft.
 - Upstream code flow already uses PKCE and permits an absent client secret.
   It does not yet send upstream `private_key_jwt` assertions.
+- Static upstream metadata can override a discovery document's issuer, and
+  domain-specific routes may use `preferred_username` or `upn` when `email` is
+  absent. Neither behaviour is permitted for an automatically discovered
+  issuer; the stricter checks in section 6 need a separate path.
 - `OTP_ALLOWED_DOMAINS=example.org` also accepts subdomains. It is not an
   instance-wide exact-domain restriction.
 - [ADR 0011](../adr/0011-subject-derived-from-the-verified-address.md) derives
@@ -72,10 +79,12 @@ The relevant implementation is [upstream routing](../../src/upstream/index.js),
 
 ### 1. Scope and trust model
 
-Add opt-in domain discovery and a terminal SAG federation profile. A terminal
-issuer authenticates locally and does not forward these logins to another
-upstream. Version 1 targets the OTP-only example. Arbitrary broker chains,
-automatic DCR, and federation trust-anchor management are outside this version.
+Add opt-in, domain-wide `_openid` discovery of a generic OIDC issuer and CIMD
+onboarding of the broker as its client. Version 1 treats a discovered issuer as
+authoritative for verified addresses at the delegated domain, whatever software
+it runs. Automatic DCR and federation trust-anchor management are outside this
+version. Broker chains are not useful in the OTP-only example, but a provider
+is not disqualified merely because it authenticates through its own upstream.
 
 The broker trusts a domain-authenticated delegation only for that exact domain.
 It does not add the discovered issuer as `common`, import its signing keys into
@@ -84,31 +93,45 @@ Peer JWKS federation serves one issuer across deployments; this proposal joins
 separate issuers through OIDC.
 
 Domain authority is a deliberate identity policy: the domain operator can
-assert addresses within its domain. Domain compromise, reassignment, and
-mailbox recycling can consequently affect existing email-derived accounts.
-Neither DNSSEC nor CIMD proves a person's legal identity or an assurance level.
+choose an issuer that asserts addresses within its exact domain. Domain
+compromise, reassignment, and mailbox recycling can consequently affect
+existing email-derived accounts. Neither DNSSEC nor CIMD proves a person's
+legal identity, that the issuer runs SAG, or an assurance level. The signed
+ID token must still be checked against the issuer selected by this delegation
+and against the address that started the transaction.
 
 ### 2. Domain-to-issuer discovery
 
-Offer this experimental DNS record:
+Use a domain-wide record in the syntax of DNS-based OIDC Discovery -01:
 
 ```dns
-_sag-issuer.example.org. 300 IN TXT "v=SAG1; issuer=https://idp.example.org"
+_openid.example.org. 300 IN TXT "v=OID1;iss=idp.example.org"
 ```
 
 Query the exact email domain after validated IDNA A-label conversion and
 lowercasing of the domain only. Do not query parent domains, infer a route from
-MX/SPF, or place an email local part in DNS.
+MX/SPF, or place an email local part in DNS. Do not query the draft's
+`_openidemail` name: this profile delegates a domain, not an individual
+address. DNS does not identify the person signing in.
 
 Version 1 requires one TXT RR, joining only that RR's character strings in
-order. Reject multiple records, duplicate or unknown tags, unsupported
-versions, empty values, and records over 2 KiB. Tag names are case-sensitive;
-trim surrounding ASCII whitespace and preserve the issuer value exactly.
-Require `v=SAG1` and one `issuer` tag. A literal semicolon inside the issuer
-must be percent-encoded. The issuer is an absolute HTTPS URL without
-credentials, query, fragment, or dot path segments. Paths are allowed; this
-profile permits only the default HTTPS port. Reject CNAME/DNAME and wildcard
-synthesis for this record in version 1.
+order. Reject multiple TXT records, duplicate tags, empty required values,
+unsupported versions, and records over 2 KiB. Do not choose one of several
+conflicting records. The `v=OID1` tag must come first and `iss` must occur
+exactly once. Tag names and values are case-sensitive, except DNS hostnames;
+trim surrounding ASCII whitespace as the draft specifies. Ignore unknown tags
+and `clp`, which cannot change the issuer or identity checks in this profile.
+
+The draft's `iss` value is an issuer **hostname**, optionally followed by a
+path, rather than a URL with a scheme. For example, `iss=idp.example.org/tenant`
+selects `https://idp.example.org/tenant`. Require a valid A-label DNS hostname;
+reject a scheme, credentials, IP literal, query, fragment, dot path segments,
+encoded dot segments or path separators, repeated slashes, a trailing slash,
+and any explicit port. Lowercase the hostname, preserve the path bytes exactly,
+and construct an HTTPS issuer. Provider metadata and the ID token must each
+reproduce this exact issuer string. This restricted grammar is deliberate;
+accepting both URL and hostname forms would introduce ambiguous issuer
+identifiers.
 
 Automatic trust requires either:
 
@@ -131,7 +154,11 @@ Require HTTP 200, the requested `subject`, and exactly one issuer link with
 `rel` equal to `http://openid.net/specs/connect/1.0/issuer`. For this profile,
 do not follow redirects; that is stricter than general WebFinger. Reject a
 conflict with a present TXT candidate. A WebFinger result is bound to the
-requested account, not cached as a rule for every account at the domain.
+requested account, not cached as a rule for every account at the domain. Its
+`href` must be an absolute HTTPS issuer URL with the same hostname, port, path,
+credential, query, and fragment restrictions as the DNS-derived issuer. Use
+simple string comparison for agreement with a TXT candidate; do not silently
+canonicalise a mismatch.
 
 After DNS absence, try WebFinger. An HTTPS 404, or a valid matching-subject
 response without an issuer link, means no delegation only when there was no
@@ -143,71 +170,178 @@ DNSSEC `bogus`, a timeout, and a malformed answer are errors, not absence.
 `insecure` or `indeterminate` never means secure; an ordinary TXT resolver
 returning strings cannot satisfy the DNSSEC route. DoH encrypts transport but
 does not itself establish signed delegation. An AD flag is usable only from
-an explicitly trusted validating resolver over a protected channel.
+an explicitly trusted validating resolver over a protected channel. The
+resolver must also prove the queried owner name: reject CNAME/DNAME aliases,
+wildcard synthesis, and an answer for another name in version 1. Apply the
+same checks to authenticated denial of existence. A positive insecure record
+is only a candidate for independently authenticated WebFinger confirmation.
 
 ### 3. Routing and failure behaviour
 
 Apply these steps in order:
 
-1. Enforce the instance's exact-domain admission policy.
-2. Honour operator-configured local routing and domain/parent upstream routes.
-3. If enabled, attempt authenticated domain discovery.
-4. Only when discovery is absent, retain existing `common`, MX/SPF selection,
-   and permitted OTP behaviour.
+1. Enforce the instance's exact-domain admission policy, operator deny rules,
+   and configured local authentication route.
+2. If enabled, attempt authenticated `_openid` discovery, with WebFinger where
+   the DNS rules above require it.
+3. If an issuer is found, compare it by exact string equality with the issuer
+   of each *eligible* configured upstream: exact-domain, then parent-domain,
+   then `common`. Use an explicit configured issuer or the exact issuer in
+   that upstream's validated provider metadata. Use the most specific match
+   and its configured client registration. A configured route for an unrelated
+   domain is not eligible; duplicate matches at the same rank are a
+   configuration error. Do not match on hostname, suffix, issuer template, or
+   provider name.
+4. If no configured issuer matches, inspect the discovered issuer's OIDC
+   metadata for the dynamic CIMD and client capability requirements in section
+   4. Select it only when one supported client path is available.
+5. If discovery is absent, or a well-formed provider explicitly lacks those
+   dynamic capabilities, use today's exact-domain, parent-domain, `common`,
+   MX/SPF hint, and permitted OTP rules.
 
-An authenticated delegation selects that route exclusively for this attempt.
-An unavailable issuer, unsupported profile, rejected client, or failed
-validation MUST NOT silently fall back to hosted OTP or a common provider.
-Discovery errors also stop the attempt. The user can retry or start with a
-different address. Operator configuration remains an explicit override.
+After the email screen and any earlier session-reuse decision, the path below
+includes the current selection of multiple eligible upstreams. MX and SPF are
+hints within that already eligible set, including multiple configured domain
+routes; they never establish issuer authority. SPF is consulted only when MX
+identifies no known provider. A recognised mail provider outside the eligible
+set leads to the chooser.
 
-An unsigned NXDOMAIN can be forged. Consequently, deployments requiring
-mandatory federation for known domains must pin that requirement locally;
-opportunistic discovery alone cannot guarantee its use after an attacker
-suppresses all unauthenticated discovery signals. This limitation must be
-visible in deployment guidance.
-
-### 4. Provider metadata and terminal capability
-
-Fetch OIDC configuration from the authenticated issuer using OIDC's path
-rules, and require its `issuer` to equal the delegated string exactly. Do not
-replace a mismatched metadata issuer with the configured value. RFC 8414 and
-OIDC use different well-known placement for issuers containing paths.
-
-For automatic version-1 routing, require code flow, `openid email`, S256 PKCE,
-the selected client authentication method, RFC 9207 response issuer support,
-`client_id_metadata_document_supported: true`, and this proposed extension:
-
-```json
-{
-  "urn:sag:domain_federation": {
-    "version": 1,
-    "terminal": true,
-    "domains": ["example.org"]
-  }
-}
+```mermaid
+flowchart TD
+    A["Validated email and exact domain"] --> B{"Allowed by instance policy?"}
+    B -- No --> Stop["Stop sign-in"]
+    B -- Yes --> L{"Configured local auth route?"}
+    L -- Yes --> Local["Use local authentication"]
+    L -- No --> D{"Domain discovery enabled?"}
+    D -- No --> E{"Exact configured upstreams?"}
+    D -- Yes --> DNS["Query TXT at _openid.domain"]
+    DNS --> R{"DNS result and validation state"}
+    R -->|Secure exact-owner answer| Parse["Parse one v=OID1;iss record"]
+    R -->|Insecure or indeterminate answer| Candidate["Parse unsigned candidate"]
+    R -->|No record| WF["Query domain HTTPS WebFinger for this account"]
+    R -->|Bogus, timeout, or malformed| Stop
+    Parse -- Invalid --> Stop
+    Parse -- Valid --> MatchIssuer{"Exact issuer match to eligible configured upstream?"}
+    Candidate -- Invalid --> Stop
+    Candidate -- Valid --> WF
+    WF --> W{"WebFinger outcome"}
+    W -->|Issuer agrees with TXT, or no TXT exists| MatchIssuer
+    W -->|No issuer and no TXT exists| E
+    W -->|Conflict, error, or unsigned TXT unconfirmed| Stop
+    MatchIssuer -- Yes --> Static["Use configured client and endpoints; bind discovered issuer"]
+    MatchIssuer -- No --> M{"Valid OIDC metadata with exact issuer?"}
+    M -- Error or mismatch --> Stop
+    M -- Yes --> Cap{"CIMD, code flow, and response issuer supported?"}
+    Cap -- No --> E
+    Cap -- Yes --> Auth{"private_key_jwt and signing alg supported?"}
+    Auth -- Yes --> Private["Use dynamic CIMD client with private_key_jwt"]
+    Auth -- No --> PKCE{"Public client and S256 PKCE supported?"}
+    PKCE -- Yes --> Public["Use dynamic CIMD public client with PKCE"]
+    PKCE -- No --> E
+    Static --> Federate["Begin OIDC code flow; verify callback issuer, ID token, and exact email"]
+    Private --> Federate
+    Public --> Federate
+    E -- Yes --> Eligible["Use exact upstream candidates"]
+    E -- No --> P{"Parent-domain configured upstreams?"}
+    P -- Yes --> Parent["Use parent upstream candidates"]
+    P -- No --> Common["Use configured common candidates"]
+    Eligible --> Count{"Eligible upstream count"}
+    Parent --> Count
+    Common --> Count
+    Count -- One --> Upstream["Use configured upstream"]
+    Count -- Multiple --> H{"Mail hint enabled?"}
+    Count -- Zero --> OTP["Existing OTP, assurance, or no-route handling"]
+    H -- No --> Chooser["Show eligible upstream chooser"]
+    H -- Yes --> MX{"MX identifies a known mail provider?"}
+    MX -- Yes --> Match{"Identified provider is eligible?"}
+    MX -- No --> SPF{"SPF TXT identifies a known mail provider?"}
+    SPF -- Yes --> Match
+    SPF -- No --> Chooser
+    Match -- Yes --> Mode{"Hint mode is select?"}
+    Match -- No --> Chooser
+    Mode -- Yes --> Upstream
+    Mode -- No --> Ordered["Show chooser with hinted provider first"]
 ```
 
-The metadata is a capability assertion, never evidence of domain ownership or
-genuine SAG software. Another implementation can support the profile. The
-broker still requires delegation and enforces the exact requested domain.
+Once a matching configured or capable dynamic issuer is selected, that route
+is exclusive for this attempt. A rejected client, unavailable issuer, callback
+error, or failed token validation MUST NOT silently fall back to hosted OTP or
+another upstream. Discovery validation errors, metadata fetch errors, and
+issuer mismatches also stop the attempt. Only a valid metadata document whose
+advertised dynamic capabilities are insufficient is treated like no
+delegation for routing. This preserves the requested fallback without turning
+an attacker-induced timeout or malformed document into a downgrade. A
+configured issuer chosen through DNS still uses the strict address and issuer
+checks in section 6, even if an ordinary static route has looser checks.
 
-SAG publishes `terminal: true` only with domain discovery off, no configured
-upstreams, a finite exact-domain admission list, and an available local
-authentication method. Reject self-delegation. This prevents compliant SAG
-instances from creating recursive broker loops; it cannot make a malicious
-external issuer behave honestly. Existing static OIDC routes need not adopt
-this extension.
+An unsigned NXDOMAIN can be forged. Also, a genuine delegation to a provider
+without the required dynamic capabilities deliberately returns to ordinary
+routing. Deployments requiring mandatory federation for known domains must
+pin that requirement locally and fail closed on missing or unsupported
+discovery; opportunistic discovery cannot guarantee exclusive use of the
+delegated issuer. This limitation must be visible in deployment guidance.
+
+### 4. Provider metadata and CIMD capability
+
+For an unconfigured issuer, fetch `/.well-known/openid-configuration` using
+OIDC's path rules, and require its `issuer` to equal the constructed delegated
+issuer string exactly. A configured route may use its explicit endpoints or
+existing provider discovery, but any fetched metadata must pass the same
+issuer comparison. Do not replace a mismatched metadata issuer with a locally
+expected value. RFC 8414 and OIDC use different well-known placement for
+issuers containing paths.
+
+An exact issuer match to an eligible configured upstream uses that upstream's
+existing client ID, credentials, and endpoints. It does not need CIMD support
+or a new client registration. The configuration and any fetched metadata must
+agree with the delegated issuer exactly. Section 6's strict checks apply
+despite any looser rules used by ordinary configured routes.
+
+For an unconfigured issuer, require code flow, `openid email`, RFC 9207
+response issuer support, and the literal JSON boolean
+`client_id_metadata_document_supported: true` in the OIDC document. This is
+the CIMD draft's standard capability name, not
+`urn:sag:client_registration.cimd`. Then require at least one usable path:
+
+1. `private_key_jwt` in `token_endpoint_auth_methods_supported`, with an
+   advertised signing algorithm the broker supports and a broker-owned public
+   key in its CIMD document. Use S256 PKCE as well when the issuer supports it.
+2. `none` in `token_endpoint_auth_methods_supported` plus S256 in
+   `code_challenge_methods_supported`, with the broker's separate public CIMD
+   client and a fresh transaction-bound PKCE verifier.
+
+An absent or false CIMD flag, missing code flow, or neither usable client path
+means no dynamic route: continue through ordinary configured upstream and OTP
+routing. The same applies when a well-formed document explicitly reports no
+RFC 9207 response issuer support. A failed fetch, malformed document, or
+issuer mismatch is an error and stops the attempt. A configured-issuer match
+does not depend on these dynamic capability checks.
+
+SAG should publish the boolean in both its OpenID configuration and RFC 8414
+metadata, derived from `CLIENTS_CIMD_ENABLED`: true when URL client metadata
+fetching is enabled and CIMD -02 validation is implemented, false otherwise.
+The draft requires the RFC 8414 metadata field; mirroring it in OIDC
+configuration is an explicit interoperability choice for OIDC brokers.
+Existing `urn:sag:client_registration` may remain informational but must not
+substitute for the standard flag.
+
+These metadata fields announce capabilities, not authority over an email
+domain. No SAG-specific extension or `terminal` assertion is required. A
+generic OIDC provider is eligible when it satisfies this profile and the DNS
+or WebFinger delegation names it. Reject self-delegation. A domain-owned SAG
+should have discovery off to avoid cycles; the broker cannot impose this on a
+generic provider. A malicious issuer remains controlled by the domain's
+delegation, so identity acceptance depends on the exact token checks below.
 
 ### 5. SAG as a CIMD client
 
-The calling broker publishes its own metadata at this proposed ordinary path:
+The calling broker publishes a private-client document at this proposed path:
 
 ```text
 https://auth.resoauth.cloud/federation/client-metadata.json
 ```
 
-The terminal issuer fetches that document when the broker uses its URL as
+The discovered issuer fetches that document when the broker uses its URL as
 `client_id`. The document belongs to the broker, not to the discovered issuer.
 Its callback belongs to the broker too:
 
@@ -225,58 +359,98 @@ Its callback belongs to the broker too:
 }
 ```
 
+The broker also publishes a separate public-client document at
+`https://auth.resoauth.cloud/federation/public-client-metadata.json`. It uses
+that exact URL as `client_id`, the same fixed callback and requested scopes,
+`token_endpoint_auth_method: none`, and no `jwks_uri`. One client ID must never
+change its declared method to suit a provider: the broker chooses the
+appropriate document before authorisation and seals that client ID and method
+into the transaction.
+
 Use CIMD -02's exact client-ID matching, HTTP 200, redirect refusal, credential
 restrictions, and explicit authentication method processing. Scope this SAG
 profile further to same-origin HTTPS callbacks and client JWKS, with no
 wildcards. Serve the document from the configured public issuer, never an
-untrusted Host header. CIMD admission remains subject to the terminal
+untrusted Host header. CIMD admission remains subject to the upstream
 operator's policy; enabling discovery does not enable arbitrary clients.
 
-Recommend `private_key_jwt` plus PKCE for production gateways. It requires a
-gateway-owned private key but no shared client secret or per-upstream
-registration. Publish only public keys, preferably from a dedicated federation
-client key set. Keep private keys out of metadata and browser-carried state.
+Prefer `private_key_jwt` plus PKCE where the provider supports both. The
+private method requires a gateway-owned key but no shared client secret or
+per-upstream registration. Publish only public keys, preferably from a
+dedicated federation client key set. Keep private keys out of metadata and
+browser-carried state. If private-key authentication is unavailable, the
+public document is usable only with S256 PKCE. Never retry an authentication
+method or client ID after an upstream authorisation has begun.
 
 The upstream client assertion uses the CIMD URL as both `iss` and `sub`, the
 upstream issuer as its sole `aud`, a unique `jti`, and a maximum 60-second
-lifetime. The receiving SAG requires atomic replay claiming for this profile.
+lifetime. This audience follows the proposed JWT client authentication update;
+an external provider that requires a different assertion audience is not
+compatible with the automatic private-key profile. The receiving SAG requires
+atomic replay claiming for this profile.
 Key rotation publishes the new public key before switching signers and accounts
 for metadata cache lifetime. A material policy change invalidates in-flight
 authorisation rather than combining old and new client policy.
 
-An explicitly enabled public-client variant can publish
-`token_endpoint_auth_method: none`, omit keys, and use PKCE alone. This proves
-possession of the transaction verifier, not the gateway's private key. Never
-silently downgrade a declared `private_key_jwt` client to `none`.
+The public client proves possession of the transaction verifier, not the
+gateway's private key. It is a separate registration with its own URL, not a
+silent downgrade of a declared `private_key_jwt` client.
 
 ### 6. Authentication and identity checks
 
-Start a normal OIDC code request with the broker's CIMD URL, exact callback,
-`scope=openid email`, fresh `state` and `nonce`, S256 challenge, and the typed
-address as `login_hint`. A login hint is not an access restriction.
+Start a normal OIDC code request with the selected configured client ID or
+broker CIMD URL, exact callback, `scope=openid email`, fresh `state` and
+`nonce`, and the typed address as `login_hint`. Send an S256 challenge whenever
+the issuer supports it; it is mandatory for the dynamic public-client path.
+A login hint is not an access restriction.
 
 Seal a bounded descriptor containing the exact domain, requested address,
-issuer, endpoints, broker client ID, nonce, verifier, discovery evidence type,
-evidence expiry, and policy hash. Bind it to the initiating browser as well as
-the downstream transaction; sealed state alone is not browser binding.
+constructed issuer, metadata issuer, authorisation and token endpoints, JWKS
+URI, selected client ID and authentication method, nonce, any PKCE verifier,
+discovery evidence type, evidence expiry, and policy hash. Bind it to the
+initiating browser as well as the downstream transaction; sealed state alone
+is not browser binding. No callback parameter or unverified token claim may
+choose a new issuer, endpoint, or key set.
 
 At callback, check [RFC 9207](https://www.rfc-editor.org/rfc/rfc9207.html) `iss`
 against the sealed issuer before exchanging the code, including error
-responses. Exchange only at the selected endpoint. Validate the ID token's
-signature, permitted algorithm, issuer, audience, `azp` where applicable,
-expiry, nonce, and required authentication time. Require a non-empty `sub`,
-an `email`, and the literal boolean `email_verified: true`.
+responses. Exchange only at the sealed token endpoint. Fetch keys only from
+the JWKS URI bound to that exact issuer by selected metadata or explicit
+configuration, and ignore token-supplied
+key URLs such as `jku` and `x5u`. Validate the ID token's signature with an
+allowed algorithm, then require its `iss` to equal the delegated issuer and
+any selected metadata issuer strings exactly. Check `aud` contains the selected
+client ID and require `azp` to equal it when applicable. Verify expiry, issue
+time, nonce, and required authentication time. Require a non-empty `sub`, an
+`email` string, and the literal boolean `email_verified: true`. Reject absent, false,
+string-valued, and otherwise ambiguous verification claims.
 
 The canonical returned email MUST equal the requested email and its domain
 MUST equal the delegated domain. Do not apply client-specific plus stripping
 before this comparison, accept `preferred_username`/`upn` as substitutes, or
 inherit authority over subdomains. Account switching requires a new discovery
-transaction for the new address.
+transaction for the new address. Canonicalisation is limited to the same
+documented case and IDNA rules used for the typed address; it must not turn a
+different mailbox into a match. Compare the address only after the signature
+and issuer checks. A validly signed token is insufficient if it comes from the
+wrong issuer, even when it contains the expected address.
+
+For example, `good@example.com` resolves to
+`_openid.example.com` with `iss=auth.example.com`. A token with
+`email=good@example.com` and `email_verified=true` from
+`https://bad.not-example.com` MUST be rejected because its `iss` is not
+`https://auth.example.com`. The broker must never fetch
+`bad.not-example.com`'s keys to make that token valid. Conversely, a correctly
+signed token from `https://auth.example.com` asserting `good@other.example`
+MUST fail the exact address and domain checks. The email claim does not select
+which issuer may vouch for it.
 
 Revalidate expired evidence and current local policy before callback acceptance,
 session reuse, downstream code redemption, and UserInfo release. If the issuer
 or relevant policy changed, restart; never send an existing code to a newly
-discovered token endpoint. Cache snapshots cannot make expired trust fresh.
+discovered token endpoint. If refreshed metadata changes the issuer, token
+endpoint, or JWKS URI for an in-flight transaction, restart rather than mixing
+old and new values. Cache snapshots cannot make expired trust fresh.
 
 Preserve ADR 0011's subject derivation and the hosted issuer. Do not link an
 operator-provisioned local account by email alone; its existing explicit
@@ -284,15 +458,22 @@ issuer/subject link rules still apply.
 
 ### 7. Preserve authentication strength
 
-**Email OTP at the terminal MUST remain email-OTP-strength at the broker.**
-Neither an extra OIDC hop, the `fed` method, an `otp` string, nor AMR array
-length grants MFA or a stronger authentication context.
+Domain delegation conveys authority to assert an address, not how that address
+was authenticated. Assign a new neutral `urn:sag:acr:discovered` context to an
+automatically discovered login, with no positive strength ranking. It can
+answer a relying party that has no assurance floor; it cannot satisfy a demand
+for email OTP, federation strength, or MFA solely because the upstream sent
+`acr` or `amr`. This avoids falsely describing a generic provider's method as
+email OTP or treating a second OIDC hop as stronger authentication. Advertise
+this neutral context only when discovery is enabled, and require a
+relying party's configured assurance floor to be checked before issuance.
 
-Version 1 caps automatically discovered identities at the local email-OTP
-assurance level. Higher assurance requires a separately configured exact-issuer
-mapping and is outside automatic version-1 admission. Retain the upstream
-issuer and bounded original evidence separately from locally generated AMR.
-Never feed synthetic method labels back into a strength inference.
+An exact-issuer assurance contract may map validated upstream evidence to a
+local context, including email-OTP-strength for a domain-owned SAG known to
+use email OTP. No automatic mapping may assign MFA. Retain the upstream issuer
+and bounded original evidence separately from locally generated AMR. Never
+feed synthetic method labels back into a strength inference. A separately
+configured higher-assurance mapping is outside automatic version-1 admission.
 
 The configured relying-party assurance floor is mandatory, independent of
 optional requested ACR preferences. Recheck it at every result and session
@@ -304,12 +485,15 @@ These are release gates, not optional follow-up work. They overlap with
 [RFC 0016](0016-trusted-authentication-assurance.md), but this proposal requires
 the stated behaviour even if that separate RFC has not been accepted.
 
-### 8. Exact-domain local instance
+### 8. Optional domain-owned SAG instance
 
-Introduce `IDENTITY_ALLOWED_DOMAINS`, an optional instance-wide list of exact
-normalised domains. Empty retains today's unrestricted admission. When set,
-it MUST gate all authentication methods, session reuse, code redemption, and
-UserInfo, not just OTP sending. No wildcard or suffix matching is permitted.
+For an operator using SAG as the domain's issuer, introduce
+`IDENTITY_ALLOWED_DOMAINS`, an optional instance-wide list of exact normalised
+domains. Empty retains today's unrestricted admission. When set, it MUST gate
+all authentication methods, session reuse, code redemption, and UserInfo, not
+just OTP sending. No wildcard or suffix matching is permitted. This setting is
+a safeguard for the example deployment, not a requirement imposed on other
+OIDC providers by the discovery protocol.
 
 Illustrative configuration, including proposed settings:
 
@@ -332,8 +516,8 @@ Node-only password-file identity backend. The new global admission check
 excludes `sub.example.org` even though the existing OTP allow-list includes it.
 
 The broker opts in with proposed `UPSTREAM_DISCOVERY=domain`; its default is
-`off`. Federation client key configuration and the explicit public-client
-opt-in must be settled during implementation review. These examples are not
+`off`. Federation client key configuration and the two distinct CIMD document
+URLs must be settled during implementation review. These examples are not
 deployable on the current release. Implementation must document every new
 setting in the configuration reference.
 
@@ -378,15 +562,20 @@ request URLs.
 
 Implement in this order:
 
-1. Exact-domain admission, truthful assurance, and CIMD -02 validation and
-   capability advertisement. [RFC 0017](0017-client-trust-and-assertion-audiences.md)
-   discusses related CIMD work; the requirements above stand independently.
-2. Broker client metadata and dedicated public keys; upstream asymmetric
-   client authentication, policy snapshots, and replay protection.
-3. WebFinger discovery and the authenticated DNS resolver interface, including
-   TTL, security state, authenticated absence, and owner-name information.
-4. The terminal profile, strict dynamic callback validation, and a two-instance
-   deployment test. Enable it only after every security gate passes.
+1. Truthful assurance, CIMD -02 validation, and
+   `client_id_metadata_document_supported` in both discovery documents.
+   Add exact-domain admission for the optional domain-owned SAG deployment.
+   [RFC 0017](0017-client-trust-and-assertion-audiences.md) discusses related
+   CIMD work; the requirements above stand independently.
+2. Both broker CIMD documents and dedicated public keys; upstream asymmetric
+   client authentication, public-client PKCE, policy snapshots, and replay
+   protection.
+3. Generic `_openid` parsing, WebFinger discovery, and the authenticated DNS
+   resolver interface, including TTL, security state, authenticated absence,
+   and owner-name information.
+4. Strict dynamic callback and ID-token validation, then a two-instance
+   deployment test and an independent generic-OIDC provider test. Enable the
+   route only after every security gate passes.
 
 Keep the core platform-independent. Existing Node and Workers resolver
 bindings return strings without DNSSEC evidence; extend the interface rather
@@ -397,19 +586,38 @@ Acceptance must demonstrate:
 
 - An unregistered broker completes a real two-SAG code flow with CIMD and no
   shared client secret; only `example.org` succeeds, including direct endpoint
-  calls and reused sessions. Subdomains and lookalike suffixes fail.
+  calls and reused sessions. Subdomains and lookalike suffixes fail. A generic
+  OIDC provider with the required capabilities also succeeds without any
+  SAG-specific metadata extension.
+- A discovered exact issuer selects an eligible configured domain or `common`
+  upstream using its existing registration, even when that issuer has no CIMD
+  support. A configured issuer for another domain, a hostname-only match, and
+  ambiguous same-rank registrations never qualify. The selected configured
+  route still applies exact issuer and address checks.
+- An unconfigured issuer with CIMD and `private_key_jwt` uses the private
+  client ID; one offering only a public client with S256 PKCE uses the distinct
+  public client ID. Missing CIMD, code-flow, response-issuer, or compatible
+  client capabilities return to ordinary configured and OTP routing. A failed
+  metadata fetch or issuer mismatch stops the attempt, and a selected route
+  never falls back after an authorisation or token error.
 - DNSSEC secure/insecure/bogus states, absence, conflicts, multiple TXT RRs,
   chunking, IDNA, path issuers, and WebFinger account isolation behave as above.
-- A validly signed out-of-domain or different-address token fails. Missing or
-  false verification, wrong issuer/audience/nonce, and mix-up attempts fail.
-- Email OTP remains OTP-strength through the broker; forged MFA labels and
-  weaker requested alternatives cannot satisfy a client's stronger floor.
+- A token from `bad.not-example.com` asserting `good@example.com` fails after
+  delegation to `auth.example.com`, even if validly signed by the bad issuer.
+  A token signed by the delegated issuer with a different address or domain
+  also fails. Missing or false verification, wrong issuer/audience/nonce,
+  token-supplied key URLs, and mix-up attempts fail.
+- A generic discovered login receives neutral assurance; a domain-owned SAG's
+  email OTP reaches OTP-strength only through an exact-issuer contract. Forged
+  MFA labels and weaker requested alternatives cannot satisfy a client's
+  stronger floor.
 - Metadata mismatch, client key rotation, replay, expired evidence, and
   delegation changes cannot redirect code redemption or reuse stale trust.
 - SSRF, redirect, rebinding, slow-body, and oversized-response cases fail on
-  each enabled adapter. Self-delegation and non-terminal issuers are refused.
+  each enabled adapter. Self-delegation and accidental broker loops are refused.
 - Established routes remain unchanged with discovery off. A selected dynamic
-  route never fails open to hosted OTP or a common upstream.
+  route never fails open to hosted OTP or a common upstream. The CIMD flag is
+  truthful with CIMD enabled and disabled in both advertised documents.
 
 ## Cost
 
@@ -422,9 +630,10 @@ until those two choices have been prototyped.
 
 The proposal preserves ordinary subject derivation and the distinction between
 upstream federation and peer keys. It tightens authentication for newly
-discovered upstreams and adds an optional global admission boundary. New
-evidence-bearing sessions and transactions may require a pre-release restart;
-deploy terminal support before enabling broker discovery.
+discovered upstreams and adds an optional global admission boundary for a
+domain-owned SAG. New evidence-bearing sessions and transactions may require a
+pre-release restart. Unconfigured issuer routing requires issuer-side CIMD;
+exact configured-issuer matches retain their existing registration.
 
 If RESOAuth needs centrally governed membership, shared assurance policy, or
 trust marks, implement OpenID Federation 1.1 as a separate profile with
