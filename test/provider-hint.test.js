@@ -267,7 +267,7 @@ test('a domain-specific upstream is not second-guessed by DNS', async () => {
   assert.deepEqual(resolver.asked, [], 'no lookup is needed when the operator has decided');
 });
 
-test('one upstream and email codes is not an ambiguity, so nothing is looked up', async () => {
+test('one common upstream is selected only when the mail records agree', async () => {
   clearMailProviderCache();
   const resolver = stubResolver({ 'acme.test': MICROSOFT });
   const sag = createInstance({
@@ -276,7 +276,46 @@ test('one upstream and email codes is not an ambiguity, so nothing is looked up'
   });
   const { res } = await submitEmail(sag, 'jamie@acme.test');
   assert.equal(res.status, 303);
-  assert.deepEqual(resolver.asked, []);
+  assert.match(res.headers.get('location'), /^https:\/\/login\.microsoftonline\.test\/authorize\?/);
+  assert.deepEqual(resolver.asked, ['MX acme.test']);
+});
+
+test('a Microsoft mail domain uses email OTP when Microsoft is not configured', async () => {
+  clearMailProviderCache();
+  const resolver = stubResolver({ 'sports.test': { MX: ['0 sports-test.mail.protection.outlook.com.'] } });
+  const sag = createInstance({
+    ...upstream('UPSTREAM_GOOGLE_COMMON', { clientId: 'common:google-id', issuer: 'https://accounts.google.test' }),
+    SAG_DNS: resolver,
+  });
+  const { res, html } = await submitEmail(sag, 'jamie@sports.test');
+  assert.equal(res.status, 200);
+  assert.match(html, /<h1>Check your email<\/h1>/);
+  assert.deepEqual(resolver.asked, ['MX sports.test']);
+});
+
+test('a known but unconfigured mail provider falls back to OTP with several common upstreams', async () => {
+  clearMailProviderCache();
+  const sag = instance({ 'sports.test': MICROSOFT }, {
+    UPSTREAM_MICROSOFT_COMMON_CLIENT_ID: '',
+  });
+  const { res, html } = await submitEmail(sag, 'jamie@sports.test');
+  assert.equal(res.status, 200);
+  assert.match(html, /<h1>Check your email<\/h1>/);
+});
+
+test('one common upstream without a mail hint uses OTP, or offers an explicit choice', async () => {
+  clearMailProviderCache();
+  const common = upstream('UPSTREAM_GOOGLE_COMMON', { clientId: 'common:google-id', issuer: 'https://accounts.google.test' });
+  const zone = { 'plain.test': { MX: ['10 mail.plain.test.'] } };
+  const withOtp = createInstance({ ...common, SAG_DNS: stubResolver(zone) });
+  assert.match((await submitEmail(withOtp, 'jamie@plain.test')).html, /<h1>Check your email<\/h1>/);
+
+  clearMailProviderCache();
+  const withoutOtp = createInstance({ ...common, OTP_ENABLED: 'false', SAG_DNS: stubResolver(zone) });
+  const { res, html } = await submitEmail(withoutOtp, 'jamie@plain.test');
+  assert.equal(res.status, 200);
+  assert.match(html, /Continue with Google/);
+  assert.ok(!html.includes('Email me a code instead'));
 });
 
 test('the chooser it lands on is usable: the address survives the failure', async () => {
@@ -318,6 +357,43 @@ test('a provider refusing a guess is a second chance, not a refusal to relay', a
   const html = await back.text();
   assert.match(html, /<h1>Choose how to sign in<\/h1>/);
   assert.match(html, /Continue with Google/);
+});
+
+test('the email page offers OTP after an upstream failure and the button sends a code', async () => {
+  clearMailProviderCache();
+  const sag = createInstance({
+    ...upstream('UPSTREAM_GOOGLE_COMMON', { clientId: 'common:google-id', issuer: 'https://accounts.google.test' }),
+    SAG_DNS: stubResolver({ 'acme.test': GOOGLE }),
+  });
+  const { challenge } = await pkce();
+  const { path } = authorizeUrl({ challenge });
+  const first = await sag.raw(path);
+  const firstHtml = await first.text();
+  assert.match(firstHtml, /data-otp-recovery/);
+  assert.ok(!firstHtml.includes('Email a one-time PIN'));
+  const started = await sag.postForm('/authorize/email', { tx: extractField(firstHtml), email: 'jamie@acme.test' });
+  const state = new URL(started.headers.get('location')).searchParams.get('state');
+  const back = await sag.raw('/callback?error=access_denied&state=' + encodeURIComponent(state));
+  const html = await back.text();
+  assert.match(html, /Email a one-time PIN/);
+
+  const otp = await sag.postForm('/authorize/email', {
+    tx: extractField(html),
+    email: 'jamie@acme.test',
+    method: 'otp',
+  });
+  assert.match(await otp.text(), /<h1>Check your email<\/h1>/);
+});
+
+test('the OTP recovery action is absent when email codes are disabled', async () => {
+  const sag = createInstance({
+    ...upstream('UPSTREAM_GOOGLE_COMMON', { clientId: 'common:google-id', issuer: 'https://accounts.google.test' }),
+    OTP_ENABLED: 'false',
+  });
+  const { challenge } = await pkce();
+  const { path } = authorizeUrl({ challenge });
+  const html = await (await sag.raw(path)).text();
+  assert.ok(!html.includes('data-otp-recovery'));
 });
 
 test('a provider the person chose themselves is taken at its word', async () => {

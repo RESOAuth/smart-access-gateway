@@ -138,7 +138,7 @@ test('dns: hintUpstreams with edge cases and successful reordering', async () =>
   const upstreams = [{ id: 'u1', provider: 'google' }, { id: 'u2', provider: 'microsoft' }];
   assert.deepEqual(await hintUpstreams(offCtx, upstreams, 'example.com'), { list: upstreams });
 
-  // 2. Fewer than 2 upstreams
+  // 2. One upstream still needs evidence before an automatic redirect
   assert.deepEqual(await hintUpstreams(ctx, [upstreams[0]], 'example.com'), { list: [upstreams[0]] });
 
   // 3. No hint found (unrecognised records reach end of matchMx and matchSpf)
@@ -161,7 +161,7 @@ test('dns: hintUpstreams with edge cases and successful reordering', async () =>
   // 6. Hinted provider not among configured upstreams
   clearMailProviderCache();
   const noMatchResult = await hintUpstreams(ctx, upstreams, 'other.test');
-  assert.deepEqual(noMatchResult, { list: upstreams });
+  assert.deepEqual(noMatchResult, { list: upstreams, unmatched: true });
 });
 
 // ---------------------------------------------------------------------------

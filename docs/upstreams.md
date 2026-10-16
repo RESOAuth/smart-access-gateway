@@ -89,8 +89,8 @@ party. SAG still issues no refresh token of its own.
 
 ## Guessing the provider
 
-"Choose how to sign in" is a screen almost nobody should see. When two or more
-upstreams could take an address, the answer is usually already published in DNS,
+"Choose how to sign in" is a screen almost nobody should see. When common
+upstreams could take an address, the likely provider is often indicated by DNS,
 because an organisation whose identity is at Microsoft has its mail there too:
 
 ```sh
@@ -135,13 +135,18 @@ records they like, and all that gets them is a redirect to a provider that will
 refuse to authenticate them. Every guess is checked against the upstreams that
 were already eligible for the address, and the upstream still validates its own
 tenant or hosted domain afterwards. When the guess is wrong and the upstream
-refuses, the person lands on the chooser with every option offered and nothing
-suggested - not at a dead end.
+refuses, the person can choose another provider or use an email code if one is
+available.
 
-Provider hints look up records only when there is a real ambiguity: one
-candidate, or a domain-specific upstream the operator has already decided
-about, means no query for routing. The Microsoft consumer-account check below
-is separate and reads MX at callback.
+Provider hints look up records for common upstreams. Even one common candidate
+needs a matching mail record before SAG redirects there.
+If the records name a provider that is not configured, SAG uses email OTP when
+available. An unknown mail provider also leads to OTP when there is only one
+common candidate. Domain-specific upstreams are operator decisions and need no
+routing lookup. A sole generic OIDC common upstream without `MAIL_PROVIDER`, or
+a sole common upstream with hints switched off, also follows the explicit
+configuration without a lookup. The Microsoft consumer-account check below is
+separate and reads MX at callback.
 
 ### Where the query goes
 

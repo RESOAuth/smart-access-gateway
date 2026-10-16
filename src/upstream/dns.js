@@ -207,16 +207,16 @@ export async function mailProviderFor(ctx, domain) {
  * that, the provider name is the fingerprint, which covers Microsoft and Google
  * without any configuration at all.
  *
- * @returns {Promise<{list: object[], hinted?: object, source?: string}>}
+ * @returns {Promise<{list: object[], hinted?: object, source?: string, unmatched?: boolean}>}
  */
 export async function hintUpstreams(ctx, upstreams, domain) {
-  if (ctx.config.dns.hint === 'off' || upstreams.length < 2) return { list: upstreams };
+  if (ctx.config.dns.hint === 'off' || upstreams.length === 0) return { list: upstreams };
 
   const hint = await mailProviderFor(ctx, domain);
   if (!hint) return { list: upstreams };
 
   const hinted = upstreams.find((u) => (u.mailProvider || u.provider) === hint.provider);
-  if (!hinted) return { list: upstreams };
+  if (!hinted) return { list: upstreams, unmatched: true };
 
   return {
     list: [hinted, ...upstreams.filter((u) => u !== hinted)],
