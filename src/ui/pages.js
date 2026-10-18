@@ -13,7 +13,7 @@ const e = escapeHtml;
  * disorienting for screen reader and switch-access users and the field is the
  * first thing in the document anyway.
  */
-export function emailPage(ctx, { tx, email, rememberMe, error, clientName, clientLogoUri, action, legal }) {
+export function emailPage(ctx, { tx, email, rememberMe, error, clientName, clientLogoUri, action, legal, otpRecovery, showOtpRecovery }) {
   const forWhom = clientName
     ? 'Continue to <strong>' + e(clientName) + '</strong> by confirming your email address.'
     : 'Enter your email address to continue.';
@@ -35,7 +35,8 @@ export function emailPage(ctx, { tx, email, rememberMe, error, clientName, clien
                  ${rememberMe ? 'checked' : ''}>
           <label for="remember_me">Remember me</label>
         </div>
-        <button type="submit" data-busy-label="Continuing...">Continue</button>
+        <button type="submit" data-busy-label="Continuing..."${otpRecovery ? ' data-otp-recovery' : ''}>Continue</button>
+        ${otpRecovery && showOtpRecovery ? '<div class="also"><button type="submit" name="method" value="otp" class="secondary" data-busy-label="Sending...">Email a one-time PIN</button></div>' : ''}
       </form>`;
   return layout(ctx, { title: 'Sign in', body, legal, clientLogoUri, clientLogoAlt: clientName });
 }

@@ -163,7 +163,7 @@ const redirectTargets = (tx) => ({
 // Rendering a stage
 // ---------------------------------------------------------------------------
 
-async function renderEmail(ctx, { tx, email, error }) {
+async function renderEmail(ctx, { tx, email, error, otpRecovery = false }) {
   const rememberedEmail = await readRememberedEmail(ctx.config, ctx.request);
   const rememberMe = tx.remember_me ?? Boolean(rememberedEmail);
   const displayedEmail = email !== undefined ? email : rememberedEmail;
@@ -177,6 +177,8 @@ async function renderEmail(ctx, { tx, email, error }) {
       clientName: tx.client_name,
       clientLogoUri: tx.logo_uri,
       action: ctx.route('/authorize/email'),
+      otpRecovery: ctx.config.otp.enabled && !requiresFederation(tx.acr_values),
+      showOtpRecovery: otpRecovery,
       legal: legalFor(ctx.config, tx),
     }),
     error ? 400 : 200,
@@ -349,7 +351,11 @@ export async function handleEmailSubmit(ctx) {
     });
   }
 
-  return route(ctx, { tx: advance(next, { email }) });
+  const ready = advance(next, { email });
+  if (single(params, 'method') === 'otp' && ctx.config.otp.enabled && !requiresFederation(ready.acr_values)) {
+    return sendOtp(ctx, { tx: ready });
+  }
+  return route(ctx, { tx: ready });
 }
 
 /**
@@ -370,14 +376,24 @@ async function route(ctx, { tx }) {
   // verifier does equivalent Argon2id work for absent and malformed records.
   if (localIdentityAllowed(config, tx.email)) return renderLocalPassword(ctx, { tx });
 
-  if (candidates.length === 1) return startUpstream(ctx, { tx, upstream: candidates[0] });
-  if (candidates.length > 1) {
-    // More than one provider could hold this account. Rather than asking, look
-    // at where the domain's mail goes: it is nearly always the same provider,
-    // and a redirect is a better answer than a screen. See upstream/dns.js.
-    const { list, hinted, source } = await hintUpstreams(ctx, candidates, tx.email.split('@')[1]);
+  if (candidates.length && !candidates[0].isCommon) {
+    // A domain-specific registration is an operator decision, not a mail hint.
+    return candidates.length === 1
+      ? startUpstream(ctx, { tx, upstream: candidates[0] })
+      : renderChooser(ctx, { tx, upstreams: candidates });
+  }
+  if (candidates.length === 1 &&
+      (config.dns.hint === 'off' || (candidates[0].provider === 'oidc' && !candidates[0].mailProvider))) {
+    return startUpstream(ctx, { tx, upstream: candidates[0] });
+  }
+  if (candidates.length) {
+    const { list, hinted, source, unmatched } = await hintUpstreams(ctx, candidates, tx.email.split('@')[1]);
     if (hinted) ctx.log.debug('mail records suggest an upstream', { upstream: hinted.id, source });
     if (hinted && config.dns.hint === 'select') return startUpstream(ctx, { tx, upstream: hinted, hinted: true });
+    // A common registration says only that an upstream might serve an address.
+    // A different mail provider, or no evidence with only one candidate, must
+    // not turn that registration into an automatic redirect.
+    if (otpPossible && (unmatched || (candidates.length === 1 && !hinted))) return sendOtp(ctx, { tx });
     return renderChooser(ctx, { tx, upstreams: list, hinted: hinted?.id });
   }
   if (otpPossible) return sendOtp(ctx, { tx });
@@ -989,6 +1005,7 @@ async function offerFallback(ctx, tx, detail) {
         title: 'That sign-in did not complete',
         detail: 'Try again, or continue with an email code instead.',
       },
+      otpRecovery: true,
     });
   }
   return failureResponse(ctx, accessDenied('Signing in with your organisation provider did not complete.'), redirectTargets(tx));

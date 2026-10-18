@@ -11,15 +11,16 @@
 // the operating system's theme for a frame and then swap - the flash that makes
 // a sign-in page feel broken. Everything else waits for the document.
 //
-// Five enhancements, in the order they appear below:
+// Six enhancements, in the order they appear below:
 //
 //   1. a colour theme control, which exists only because this file ran, and so
 //      never appears as a dead control on a page whose script was blocked;
-//   2. the form_post auto-submit, which used to be an inline onload handler and
+//   2. offering an email code when the browser returns from an upstream;
+//   3. the form_post auto-submit, which used to be an inline onload handler and
 //      is here instead so that no page needs 'unsafe-inline' for script;
-//   3. tidying a pasted one-time code, and submitting once it is complete;
-//   4. submitting an authenticator code after the person finishes typing;
-//   5. marking a submitted form busy, so a second click cannot spend a second
+//   4. tidying a pasted one-time code, and submitting once it is complete;
+//   5. submitting an authenticator code after the person finishes typing;
+//   6. marking a submitted form busy, so a second click cannot spend a second
 //      attempt against the same code.
 
 import { assetVersion } from './css.js';
@@ -232,6 +233,28 @@ export const DEFAULT_JS = `
   }
 
   function enhance() {
+    var recovery = document.querySelector('[data-otp-recovery]');
+    if (recovery) {
+      window.addEventListener('pageshow', function (event) {
+        var navigation = performance.getEntriesByType('navigation')[0];
+        var form = recovery.parentNode;
+        if ((event.persisted || (navigation && navigation.type === 'back_forward')) &&
+            !form.querySelector('button[name="method"][value="otp"]')) {
+          var group = document.createElement('div');
+          group.className = 'also';
+          var button = document.createElement('button');
+          button.type = 'submit';
+          button.name = 'method';
+          button.value = 'otp';
+          button.className = 'secondary';
+          button.setAttribute('data-busy-label', 'Sending...');
+          button.textContent = 'Email a one-time PIN';
+          group.appendChild(button);
+          form.appendChild(group);
+        }
+      });
+    }
+
     var slot = document.querySelector('[data-theme-control]');
     if (slot) {
       try {

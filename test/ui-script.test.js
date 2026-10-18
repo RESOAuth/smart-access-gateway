@@ -6,6 +6,47 @@ import assert from 'node:assert/strict';
 import { runInNewContext } from 'node:vm';
 import { DEFAULT_JS } from '../src/ui/js.js';
 
+test('the email code recovery button appears only after browser back navigation', () => {
+  for (const [persisted, navigationType] of [[true, 'navigate'], [false, 'back_forward']]) {
+    let buttons = 0;
+    const form = {
+      querySelector: () => buttons ? {} : null,
+      appendChild: (group) => {
+        assert.equal(group.className, 'also');
+        assert.equal(group.child.textContent, 'Email a one-time PIN');
+        assert.equal(group.child.name, 'method');
+        assert.equal(group.child.value, 'otp');
+        buttons += 1;
+      },
+    };
+    const recovery = {
+      parentNode: form,
+    };
+    const window = new EventTarget();
+    const document = {
+      readyState: 'complete',
+      documentElement: { setAttribute() {}, removeAttribute() {} },
+      querySelector: (selector) => selector === '[data-otp-recovery]' ? recovery : null,
+      querySelectorAll: () => [],
+      createElement: () => ({ setAttribute() {}, appendChild(child) { this.child = child; } }),
+    };
+    runInNewContext(DEFAULT_JS, {
+      document,
+      window,
+      performance: { getEntriesByType: () => [{ type: navigationType }] },
+      localStorage: { getItem: () => null },
+    });
+    const shown = new Event('pageshow');
+    Object.defineProperty(shown, 'persisted', { value: false });
+    window.dispatchEvent(shown);
+    assert.equal(buttons, navigationType === 'back_forward' ? 1 : 0);
+    const restored = new Event('pageshow');
+    Object.defineProperty(restored, 'persisted', { value: persisted });
+    window.dispatchEvent(restored);
+    assert.equal(buttons, 1);
+  }
+});
+
 function authenticator({ digits = 6, requestSubmit = true, valid = true } = {}) {
   let now = 0;
   let nextTimer = 0;
