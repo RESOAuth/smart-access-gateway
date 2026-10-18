@@ -4,11 +4,43 @@ All notable changes to SAG are recorded here. Releases use semantic versions.
 
 ## Unreleased
 
+## 0.3.1 - 2026-10-18
+
+### Upgrade notes
+
+- With the default `SIGNIN_PROVIDER_HINT=select`, a sole `common` upstream now
+  needs a matching mail record for automatic routing. When there is no match
+  and email OTP is enabled, SAG sends a code instead. To route unconditionally,
+  set `SIGNIN_PROVIDER_HINT=off` or configure a domain-specific upstream.
+- Personal Microsoft accounts using a `common` upstream without
+  `ALLOWED_TENANTS` need a working MX lookup at callback when `xms_edov` is
+  absent. An unanswered or inconclusive lookup still refuses that sign-in.
+
+### Added
+
+- Personal Microsoft accounts can sign in through a `common` upstream without
+  `xms_edov` when the signed token identifies Microsoft's consumer tenant and
+  every MX record for its email domain uses Microsoft's consumer mail route.
+
+### Changed
+
+- Mail hints now apply to a sole built-in `common` upstream as well as multiple
+  candidates. An unmatched mail provider, or no hint for a sole candidate,
+  leads to email OTP when available. Domain-specific upstreams still follow
+  the operator's configuration directly.
+- People returning from an unsuccessful upstream sign-in can request an email
+  code from the sign-in page when OTP is available.
+
 ### Fixed
 
 - Release publication now retains the newly created draft and refreshes its
   assets by release id, so a stale GitHub release listing cannot hide the
   draft immediately after creation or omit newly uploaded assets.
+
+### Security
+
+- Updated the development-only `brace-expansion` dependency to 5.0.12,
+  addressing CVE-2026-102276, CVE-2026-102277, and CVE-2026-102278.
 
 ## 0.3.0 - 2026-09-24
 
