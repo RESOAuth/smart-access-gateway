@@ -39,16 +39,16 @@
     "stack:down": "test/local-stack/stack.sh down"
   },
   "devDependencies": {
-    "@eslint/css": "^2.0.0",
+    "@eslint/css": "^2.0.1",
     "@eslint/js": "^10.0.1",
-    "@eslint/json": "^2.1.0",
+    "@eslint/json": "^2.1.1",
     "@eslint/markdown": "^8.0.3",
     "@jazzer.js/core": "^4.0.0",
-    "eslint": "^10.11.0",
+    "eslint": "^10.12.0",
     "eslint-plugin-security": "^4.2.0",
     "fast-check": "^4.10.2",
     "globals": "^17.13.0",
-    "wrangler": "^4.145.0"
+    "wrangler": "^4.151.0"
   },
   "allowScripts": {
     "esbuild@0.28.1": true,
