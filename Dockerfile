@@ -5,7 +5,7 @@
 # helper for dropping privileges. That is also why there is no build stage and
 # no lockfile step.
 
-FROM node:26-alpine@sha256:6f08a523443ddedf52941874c203475b0ad503e859ad70cb26ab8be9a517dbd5
+FROM node:26-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5
 
 # su-exec is 20kB and does one thing: run a command as another user. See
 # docker/entrypoint.sh for why that is needed rather than a fixed USER.
